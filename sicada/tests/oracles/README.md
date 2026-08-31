@@ -28,8 +28,9 @@ g++ -std=c++17 -O2 -o /tmp/vfg tests/oracles/vector-fst-golden.cc && /tmp/vfg
 | `property-functions.cc` | how the property functions propagate bits |
 | `symbol-table-golden.cc` | the symbol table's serialized form |
 | `vector-fst-golden.cc` | `VectorFst`'s body bytes |
-| `interop-fixtures.cc` | writes `tests/fixtures/`, read back by `test_openfst_interop.rs` |
+| `interop-fixtures.cc` | writes every file in `tests/fixtures/`, read back by `test_openfst_interop.rs` |
 | `hlg-reference.cc` | the HLG in `tests/fixtures/`, compared against in `test_hlg.rs` |
+| `interop-readback.cc` | reads a file sicada wrote, which is the same claim the other way round |
 
 A change to any of these is a change to the file format, and breaks
 compatibility with files OpenFst produced.
