@@ -1,0 +1,3 @@
+[submodule "vendor/openfst"]
+	path = vendor/openfst
+	url = https://github.com/google-research/openfst.git

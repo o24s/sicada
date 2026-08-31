@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "sicada",
+    "sicada-bench",
+    "sicada-decode",
+]
+resolver = "3"
+
+[workspace.dependencies]
+sicada = { path = "sicada", version = "0.1.0" }
+sicada-decode = { path = "sicada-decode", version = "0.1.0" }
+arcweight = "0.3.0"
+bitflags = "2.13.1"
+cc = "1.4.4"
+criterion = "0.8.2"
+hashbrown = "0.17.1"
+log = "0.4.34"
+md-5 = "0.11.0"
+memmap2 = "0.9.11"
+pastey = "0.2.3"
+rustc-hash = "2.1.3"
+rustfst = "1.3.1"
+slab = "0.4.12"
+smallvec = "1.15.2"
+tempfile = "3.27.0"
+thiserror = "2.0.20"

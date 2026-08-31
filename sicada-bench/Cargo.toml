@@ -1,0 +1,28 @@
+[package]
+name = "sicada-bench"
+version = "0.1.0"
+edition = "2024"
+authors = ["o24s <fulmlumo@gmail.com>"]
+publish = false
+
+[lints.rust]
+# Set by build.rs when OPENFST_BUILD_DIR named a real build of OpenFst.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(openfst_algorithms)'] }
+
+[dependencies]
+sicada = { workspace = true }
+# The other two Rust WFST libraries, measured alongside OpenFst. They are
+# dependencies of this crate rather than of `sicada`, which depends on neither.
+arcweight = { workspace = true }
+rustfst = { workspace = true }
+sicada-decode = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+
+[[bench]]
+name = "data_structures"
+harness = false

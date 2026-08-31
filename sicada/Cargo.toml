@@ -1,0 +1,43 @@
+[package]
+name = "sicada"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["o24s <fulmlumo@gmail.com>"]
+description = "A weighted finite-state transducer (WFST) library, file-compatible with OpenFst"
+repository = "https://github.com/o24s/sicada"
+license = "Apache-2.0"
+readme = "../README.md"
+keywords = ["fst", "wfst", "transducer", "automata", "openfst"]
+categories = ["algorithms", "data-structures", "text-processing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+# Reading an FST whose type is only known from its file header, which dispatches
+# over the closed enum `AnyFst`, and with it the two file formats that contain
+# one, `EditFst`'s and `MatcherFst`'s. Turning it off leaves every concrete FST
+# type and every algorithm in place; only the dispatch on the header goes away.
+default = ["fst-types"]
+fst-types = []
+
+# Exposes `weight::axioms`, the semiring-law checker. sicada's own weights run
+# through it under `cfg(test)`, which a weight defined in another crate, such as
+# `sicada-decode`'s `LatticeWeight`, cannot see. Costs nothing when off.
+axioms = []
+
+[dependencies]
+bitflags = { workspace = true }
+hashbrown = { workspace = true }
+log = { workspace = true }
+md-5 = { workspace = true }
+memmap2 = { workspace = true }
+pastey = { workspace = true }
+rustc-hash = { workspace = true }
+slab = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

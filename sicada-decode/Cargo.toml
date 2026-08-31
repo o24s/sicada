@@ -1,0 +1,25 @@
+[package]
+name = "sicada-decode"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["o24s <fulmlumo@gmail.com>"]
+description = "Speech decoding over sicada's WFSTs: Viterbi, lattices, CTC and forced alignment"
+repository = "https://github.com/o24s/sicada"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["asr", "ctc", "lattice", "decoder", "wfst"]
+categories = ["algorithms", "science"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+sicada = { workspace = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true, features = ["union"] }
+
+[dev-dependencies]
+# `axioms` is the semiring-law checker, which `LatticeWeight` has to pass.
+sicada = { workspace = true, features = ["axioms"] }
+tempfile = { workspace = true }
