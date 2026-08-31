@@ -87,7 +87,7 @@ impl SetSemiringType for BooleanSet {
 ///
 /// `L` is the label type (usually `i64`).
 /// `S` defines whether `Plus` acts as `Intersect` or `Union` (and `Times` conversely).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SetWeight<L, S> {
     /// A sorted, unique vector of labels.
     /// `None` represents a special set state (Empty, Univ, or Bad),
@@ -393,19 +393,17 @@ where
                 }
             }
             SetKind::Boolean => {
-                // Or, where every value other than Zero counts as true.
-                //
-                // SICADA-BUGFIX: upstream only recognises the canonical One as
-                // true, so any other non-Zero set is treated as false and Plus
-                // stops being Or.
+                // Or, over the quotient this set type compares on.
                 if !self.is_member() || !rhs.is_member() {
                     return Self::no_weight();
                 }
-                if *self == Self::zero() && *rhs == Self::zero() {
-                    Self::zero()
-                } else {
-                    Self::one()
+                if *self == Self::one() {
+                    return self.clone();
                 }
+                if *rhs == Self::one() {
+                    return rhs.clone();
+                }
+                Self::zero()
             }
         }
     }
@@ -416,24 +414,43 @@ where
             SetKind::UnionIntersect => intersect_sets(self, rhs),
             SetKind::Boolean => {
                 // And, on the same reading.
-                //
-                // SICADA-BUGFIX: upstream returns its left argument whenever that
-                // argument is not the canonical One, so Times is neither
-                // commutative nor annihilated by Zero on the right, both of
-                // which it declares in Properties().
                 if !self.is_member() || !rhs.is_member() {
                     return Self::no_weight();
                 }
-                if *self == Self::zero() || *rhs == Self::zero() {
-                    Self::zero()
-                } else {
-                    Self::one()
+                if *self == Self::one() {
+                    return rhs.clone();
                 }
+                self.clone()
             }
             SetKind::IntersectUnion | SetKind::IntersectUnionRestrict => union_sets(self, rhs),
         }
     }
 }
+
+/// Equality, which for `BooleanSet` is not the equality of the sets.
+///
+/// `SET_BOOLEAN` reads every value other than `Zero` as the same truth value,
+/// so its equality is that of the quotient rather than of the labels: `{1}` and
+/// `One` are the same weight. Upstream says so with its own `operator==` for
+/// that set type, and its `Plus` and `Times` are written on top of it, testing
+/// `w == One()` where they mean "is true". Comparing labels here instead would
+/// make those two operations disagree with themselves.
+///
+/// SICADA-DIVERGE: upstream's boolean `operator==` answers false when either
+/// side is not a member, which leaves `NoWeight` unequal to itself. Keeping
+/// that would cost `Eq`, and nothing in either library depends on it, so a bad
+/// set equals a bad set here.
+impl<L: Copy + Ord + Into<i64> + TryFrom<i64>, S: SetSemiringType> PartialEq for SetWeight<L, S> {
+    fn eq(&self, other: &Self) -> bool {
+        if S::KIND == SetKind::Boolean {
+            return self.is_univ_set() == other.is_univ_set()
+                && self.is_bad_set() == other.is_bad_set();
+        }
+        self.labels == other.labels
+    }
+}
+
+impl<L: Copy + Ord + Into<i64> + TryFrom<i64>, S: SetSemiringType> Eq for SetWeight<L, S> {}
 
 impl<L, S> Divide for SetWeight<L, S>
 where
@@ -456,13 +473,10 @@ where
             }
             SetKind::Boolean => {
                 // Recovers a `b` with `rhs * b == self`, on the same reading.
-                //
-                // SICADA-BUGFIX: as above, upstream tests against the canonical
-                // One rather than against Zero.
                 if !self.is_member() || !rhs.is_member() {
                     return Self::no_weight();
                 }
-                if *self != Self::zero() || *rhs == Self::zero() {
+                if *self == Self::one() || *rhs == Self::zero() {
                     Self::one()
                 } else {
                     Self::zero()
@@ -556,36 +570,38 @@ mod tests {
         // The other two are absent on purpose; see the tests below.
     }
 
-    /// `BooleanSet` is a semiring on its two canonical values and nothing else.
+    /// `BooleanSet` is a semiring, including on the values that spell true
+    /// some other way.
     ///
-    /// Its documented reading is that "all non-Zero elements are equivalent", so
-    /// the carrier is really `{false, true}`. But the values are sets and
-    /// equality compares them exactly, so a weight like `{1}` is a non-canonical
-    /// spelling of true that no law can accommodate: `{1} + Zero` has to be
-    /// either `{1}` (to satisfy the identity) or `One` (to satisfy the
-    /// equivalence), and cannot be both. Upstream is in the same position and
-    /// picks neither consistently.
+    /// Its documented reading is that "all non-Zero elements are equivalent",
+    /// so the carrier is `{false, true}` and a weight like `{1}` is another
+    /// spelling of true. Equality is the quotient rather than the sets, which
+    /// is what makes the laws hold for those spellings too, and is what
+    /// upstream's own `operator==` for this set type does.
     #[test]
-    fn the_boolean_semiring_holds_on_its_canonical_values() {
+    fn the_boolean_semiring_holds_on_every_spelling_of_true() {
         type Set = SetWeight<i64, BooleanSet>;
-        axioms::check::<Set>(&[]);
 
         // Zero is the universal set and One the empty set, as upstream has them.
         assert!(Set::zero().is_univ_set());
         assert!(Set::one().is_empty_set());
 
-        // Or and And, canonicalised: any non-Zero input counts as true and the
-        // result is always one of the two canonical values.
+        // A non-canonical true, which is the same weight as One.
         let truthy = Set::from_sorted_vec(vec![1]);
+        assert_eq!(truthy, Set::one());
+        assert_ne!(truthy, Set::zero());
+
+        // The axioms over both spellings, not just the canonical pair.
+        axioms::check::<Set>(&[truthy.clone(), Set::zero(), Set::one()]);
+        axioms::check_divide::<Set>(&[truthy.clone(), Set::zero(), Set::one()]);
+
+        // Or and And, which upstream writes against One and which now mean the
+        // same thing here.
         assert_eq!(truthy.plus(&Set::zero()), Set::one());
         assert_eq!(Set::zero().plus(&truthy), Set::one());
         assert_eq!(truthy.times(&Set::zero()), Set::zero());
         assert_eq!(Set::zero().times(&truthy), Set::zero());
         assert_eq!(truthy.times(&Set::one()), Set::one());
-
-        // Which is what upstream gets wrong: it returns its left argument
-        // whenever that argument is not the canonical One, making Times neither
-        // commutative nor annihilated by Zero on the right.
         assert_eq!(
             truthy.times(&Set::zero()),
             Set::zero().times(&truthy),
