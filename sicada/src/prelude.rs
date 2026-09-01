@@ -119,7 +119,9 @@ pub mod algorithms {
         ShortestDistanceOptions, shortest_distance, shortest_distance_forward,
         shortest_distance_reverse, shortest_distance_with,
     };
-    pub use crate::algorithms::shortest_path::{ShortestPathOptions, shortest_path};
+    pub use crate::algorithms::shortest_path::{
+        ShortestPathOptions, shortest_path, shortest_path_unique,
+    };
     pub use crate::algorithms::state_map::{state_map, state_map_to};
     pub use crate::algorithms::state_sort::state_sort;
     pub use crate::algorithms::synchronize::synchronize;

@@ -10,11 +10,15 @@
 //! take the reverse FST and a best-first search over *paths* rather than
 //! states, guided by the shortest distance already computed, which brings the
 //! cost down to `n` times that of one path rather than an exponential.
+//!
+//! Two of those `n` paths may spell the same string;
+//! [`shortest_path_unique`] determinizes the reverse first so that they cannot.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::algorithms::connect::connect;
+use crate::algorithms::determinize::{DefaultCommonDivisor, determinize_fsa_with_distance};
 use crate::algorithms::reverse::reverse;
 use crate::algorithms::shortest_distance::{
     Distance, SHORTEST_DELTA, ShortestDistanceOptions, shortest_distance_with,
@@ -25,21 +29,19 @@ use crate::data_structures::indexed_heap::IndexedHeap;
 use crate::error::OpenFstError;
 use crate::fst::{ExpandedFst, Fst, MutableFst};
 use crate::fsts::vector_fst::VectorFst;
-use crate::properties::{K_FST_PROPERTIES, shortest_path_properties};
+use crate::properties::{K_ACCEPTOR, K_FST_PROPERTIES, shortest_path_properties};
 use crate::queue::{AutoQueue, Queue, natural_less_unchecked, state_weight_compare};
-use crate::weight::{PATH, PathWeight, Weight, natural_less};
+use crate::weight::{Divide, PATH, PathWeight, Weight, natural_less};
 
 /// How to search.
+///
+/// SICADA-DIVERGE: upstream's `unique` flag lives here. Here it is a separate
+/// entry point, [`shortest_path_unique`], because it needs more of the weight
+/// than this function does.
 #[derive(Debug, Clone)]
 pub struct ShortestPathOptions<W> {
     /// How many paths to return.
     pub nshortest: usize,
-    /// Whether to return only paths whose input strings differ.
-    ///
-    /// SICADA-DIVERGE: not implemented. Upstream gets it by determinizing the
-    /// reverse FST while carrying the distances through, which sicada's
-    /// determinization does not do yet.
-    pub unique: bool,
     /// How closely the distances have to converge.
     pub delta: f32,
     /// Stop at the first final state reached, which is the shortest path only
@@ -56,7 +58,6 @@ impl<W: Weight> Default for ShortestPathOptions<W> {
     fn default() -> Self {
         Self {
             nshortest: 1,
-            unique: false,
             delta: SHORTEST_DELTA,
             first_path: false,
             weight_threshold: W::zero(),
@@ -476,26 +477,18 @@ where
     <A::Weight as Weight>::ReverseWeight: Weight<ReverseWeight = A::Weight>,
     <<A::Reverse as Arc>::Weight as Weight>::ReverseWeight: Into<A::Weight>,
 {
-    if opts.unique {
-        return Err(OpenFstError::InvalidOperation(
-            "ShortestPath: returning only paths with distinct input strings is not implemented; \
-             it needs determinization to carry distances through"
-                .into(),
-        ));
-    }
     if opts.nshortest == 0 {
         ofst.delete_all_states();
         return Ok(());
     }
 
-    let distance: Distance<A::Weight> = Rc::new(RefCell::new(Vec::new()));
-    let comp = state_weight_compare::<A::StateId, A::Weight, _>(
-        Rc::clone(&distance),
-        natural_less_unchecked::<A::Weight>,
-    );
-    let comp = (A::Weight::properties() & PATH != 0).then_some(comp);
-
     if opts.nshortest == 1 {
+        let distance: Distance<A::Weight> = Rc::new(RefCell::new(Vec::new()));
+        let comp = state_weight_compare::<A::StateId, A::Weight, _>(
+            Rc::clone(&distance),
+            natural_less_unchecked::<A::Weight>,
+        );
+        let comp = (A::Weight::properties() & PATH != 0).then_some(comp);
         let mut queue = AutoQueue::new(ifst, comp);
         let mut parent: Vec<Parent<A::StateId>> = Vec::new();
         let best_final =
@@ -506,10 +499,116 @@ where
 
     // More than one path: the search runs over the reverse, guided by the
     // distance from each state of the original to a final state.
+    let (rfst, shifted) = reversed_with_distance(ifst, opts.delta)?;
+    n_shortest_path(
+        &rfst,
+        ofst,
+        &shifted,
+        opts.nshortest,
+        opts.delta,
+        &opts.weight_threshold,
+        opts.state_threshold,
+    )
+}
+
+/// The `opts.nshortest` lightest paths of `ifst` that spell different strings.
+///
+/// Where [`shortest_path`] counts two ways of spelling the same string as two
+/// answers, this returns the lighter one only. The distinctness comes from
+/// determinizing the reverse, which is where the extra demands on the semiring
+/// come from: determinization divides the arc weight back out of a subset, and
+/// keys the subsets in a hash table.
+///
+/// `ifst` has to be an acceptor, as upstream requires, and unlike upstream that
+/// is checked whatever `opts.nshortest` says.
+///
+/// `max_states` caps the determinization, as
+/// [`DeterminizeOptions::max_states`](super::determinize::DeterminizeOptions::max_states)
+/// does and for the same reason: upstream's is delayed and expands only as far
+/// as the search walks. `None` is upstream's behaviour.
+pub fn shortest_path_unique<A, F1, F2>(
+    ifst: &F1,
+    ofst: &mut F2,
+    opts: &ShortestPathOptions<A::Weight>,
+    max_states: Option<usize>,
+) -> Result<(), OpenFstError>
+where
+    A: Arc,
+    A::Weight: PathWeight,
+    <A::Reverse as Arc>::Weight: Divide + std::hash::Hash + Eq,
+    F1: Fst<A> + ExpandedFst<A>,
+    F2: MutableFst<A> + ExpandedFst<A>,
+    <A::Weight as Weight>::ReverseWeight: Weight<ReverseWeight = A::Weight>,
+    <<A::Reverse as Arc>::Weight as Weight>::ReverseWeight: Into<A::Weight>,
+{
+    if ifst.properties(K_ACCEPTOR, true) & K_ACCEPTOR == 0 {
+        return Err(OpenFstError::InvalidOperation(
+            "ShortestPath: distinct input strings takes an acceptor; project the input onto \
+             one side first"
+                .into(),
+        ));
+    }
+    // One path cannot repeat a string, so there is nothing to determinize.
+    if opts.nshortest <= 1 {
+        return shortest_path(ifst, ofst, opts);
+    }
+
+    let (rfst, shifted) = reversed_with_distance(ifst, opts.delta)?;
+
+    // SICADA-DIVERGE: upstream hands one `std::vector<Weight>` to a
+    // determinization over the *reverse* arc, which compiles only where the
+    // reverse weight is the weight. The two are distinct types here, so the
+    // distances cross by `reverse`, the identity wherever upstream builds.
+    let in_dist: Vec<<A::Reverse as Arc>::Weight> = shifted.iter().map(Weight::reverse).collect();
+    let mut out_dist: Vec<<A::Reverse as Arc>::Weight> = Vec::new();
+    let mut dfst: VectorFst<A::Reverse> = VectorFst::new();
+    determinize_fsa_with_distance(
+        &rfst,
+        &mut dfst,
+        &DefaultCommonDivisor,
+        opts.delta,
+        max_states,
+        &in_dist,
+        &mut out_dist,
+    )?;
+    let distance: Vec<A::Weight> = out_dist.iter().map(Weight::reverse).collect();
+
+    n_shortest_path(
+        &dfst,
+        ofst,
+        &distance,
+        opts.nshortest,
+        opts.delta,
+        &opts.weight_threshold,
+        opts.state_threshold,
+    )
+}
+
+/// The reverse of `ifst`, and how far each of the reverse's states is from a
+/// final state of it, with the superinitial state reversing added at the front.
+///
+/// Both searches over more than one path run over the reverse and are guided by
+/// this, so the off-by-one the superinitial state introduces is written once.
+fn reversed_with_distance<A, F>(
+    ifst: &F,
+    delta: f32,
+) -> Result<(VectorFst<A::Reverse>, Vec<A::Weight>), OpenFstError>
+where
+    A: Arc,
+    A::Weight: PathWeight,
+    F: Fst<A> + ExpandedFst<A>,
+    <A::Weight as Weight>::ReverseWeight: Weight<ReverseWeight = A::Weight>,
+{
+    let distance: Distance<A::Weight> = Rc::new(RefCell::new(Vec::new()));
+    let comp = state_weight_compare::<A::StateId, A::Weight, _>(
+        Rc::clone(&distance),
+        natural_less_unchecked::<A::Weight>,
+    );
+    let comp = (A::Weight::properties() & PATH != 0).then_some(comp);
     {
         let mut queue = AutoQueue::new(ifst, comp);
         let sd_opts = ShortestDistanceOptions {
-            delta: opts.delta,
+            delta,
             ..ShortestDistanceOptions::new(AnyArcFilter)
         };
         shortest_distance_with(ifst, &distance, &mut queue, &sd_opts)?;
@@ -535,27 +634,19 @@ where
     }
     shifted.push(superinitial);
     shifted.extend(forward);
-
-    n_shortest_path(
-        &rfst,
-        ofst,
-        &shifted,
-        opts.nshortest,
-        opts.delta,
-        &opts.weight_threshold,
-        opts.state_threshold,
-    )
+    Ok((rfst, shifted))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::algorithms::shortest_distance::shortest_distance;
-    use crate::algorithms::test_support::{Rng, paths, random_acyclic_fst};
+    use crate::algorithms::test_support::{Rng, paths, random_acyclic_fst, visible_paths};
     use crate::arc::StdArc;
     use crate::fsts::vector_fst::StdVectorFst;
     use crate::properties::K_FST_PROPERTIES;
     use crate::weights::float_weight::TropicalWeight;
+    use std::collections::BTreeMap;
 
     fn best(fst: &StdVectorFst, n: usize) -> StdVectorFst {
         let mut out = StdVectorFst::new();
@@ -660,8 +751,10 @@ mod tests {
         fst.properties(K_FST_PROPERTIES, true);
         assert!(weights(&best(&fst, 1)).is_empty());
         assert!(weights(&best(&fst, 3)).is_empty());
+        assert!(weights(&unique_best(&fst, 3)).is_empty());
 
         assert_eq!(best(&StdVectorFst::new(), 1).num_states(), 0);
+        assert_eq!(unique_best(&StdVectorFst::new(), 3).num_states(), 0);
     }
 
     /// The shortest path weighs what the shortest distance says it does.
@@ -745,21 +838,150 @@ mod tests {
         assert_eq!(with(10.0), vec![1.0, 3.0, 6.0], "the limit is 11.0");
     }
 
-    /// The unimplemented option says so rather than quietly doing something
-    /// else.
-    #[test]
-    fn asking_for_distinct_inputs_is_refused() {
+    fn unique_best(fst: &StdVectorFst, n: usize) -> StdVectorFst {
         let mut out = StdVectorFst::new();
-        let err = shortest_path(
-            &fan(),
+        shortest_path_unique(
+            fst,
+            &mut out,
+            &ShortestPathOptions {
+                nshortest: n,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        out
+    }
+
+    /// The strings a result spells, in a comparable order. The searches leave
+    /// epsilon arcs behind for the final weights they took, which spell
+    /// nothing.
+    fn strings(fst: &StdVectorFst) -> Vec<Vec<i32>> {
+        let mut out: Vec<Vec<i32>> = visible_paths(fst, 24)
+            .into_iter()
+            .map(|(ilabels, _, _)| ilabels)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Two arcs spelling `1 2` at different weights, and one spelling `3 2`.
+    fn twins() -> StdVectorFst {
+        let mut fst = StdVectorFst::new();
+        for _ in 0..4 {
+            fst.add_state();
+        }
+        fst.set_start(0);
+        fst.add_arc(0, StdArc::new(1, 1, TropicalWeight(1.0), 1));
+        fst.add_arc(0, StdArc::new(1, 1, TropicalWeight(2.0), 1));
+        fst.add_arc(0, StdArc::new(3, 3, TropicalWeight(5.0), 2));
+        fst.add_arc(1, StdArc::new(2, 2, TropicalWeight::one(), 3));
+        fst.add_arc(2, StdArc::new(2, 2, TropicalWeight::one(), 3));
+        fst.set_final(3, TropicalWeight::one());
+        fst.properties(K_FST_PROPERTIES, true);
+        fst
+    }
+
+    /// The same string spelled twice is two paths but one answer.
+    #[test]
+    fn the_same_string_twice_comes_back_once() {
+        assert_eq!(
+            weights(&best(&twins(), 3)),
+            vec![1.0, 2.0, 5.0],
+            "both ways of spelling 1 2 are paths"
+        );
+        assert_eq!(
+            weights(&unique_best(&twins(), 3)),
+            vec![1.0, 5.0],
+            "the heavier way of spelling 1 2 is not an answer of its own"
+        );
+        assert_eq!(
+            strings(&unique_best(&twins(), 3)),
+            vec![vec![1, 2], vec![3, 2]]
+        );
+    }
+
+    /// One path spells one string, so it is the ordinary search.
+    #[test]
+    fn one_distinct_path_is_the_shortest_path() {
+        assert_eq!(
+            weights(&unique_best(&twins(), 1)),
+            weights(&best(&twins(), 1))
+        );
+        assert_eq!(strings(&unique_best(&twins(), 1)), vec![vec![1, 2]]);
+        assert_eq!(unique_best(&twins(), 0).num_states(), 0);
+    }
+
+    /// The n lightest distinct paths are the n lightest *strings*, each at the
+    /// weight of its own lightest path.
+    #[test]
+    fn the_n_distinct_paths_are_the_n_lightest_strings() {
+        let mut rng = Rng::new(0x0000_D157_u64);
+        let mut checked = 0;
+        for round in 0..200 {
+            let fst = random_acyclic_fst(&mut rng, 6);
+            let mut per_string: BTreeMap<Vec<i32>, f32> = BTreeMap::new();
+            for (ilabels, _, weight) in paths(&fst, 16) {
+                per_string
+                    .entry(ilabels)
+                    .and_modify(|best| *best = best.min(weight.value()))
+                    .or_insert(weight.value());
+            }
+            if per_string.is_empty() {
+                continue;
+            }
+            checked += 1;
+            let mut all: Vec<f32> = per_string.values().copied().collect();
+            all.sort_by(f32::total_cmp);
+
+            for n in [2usize, 3, 5] {
+                let out = unique_best(&fst, n);
+                let got = weights(&out);
+                let want: Vec<f32> = all.iter().take(n).copied().collect();
+                assert_eq!(got.len(), want.len(), "round {round}, n = {n}");
+                for (got, want) in got.iter().zip(&want) {
+                    assert!(
+                        (got - want).abs() < 1e-4,
+                        "round {round}, n = {n}: {got} against {want}"
+                    );
+                }
+                let spelled = strings(&out);
+                let mut distinct = spelled.clone();
+                distinct.dedup();
+                assert_eq!(
+                    distinct.len(),
+                    spelled.len(),
+                    "round {round}, n = {n}: a string came back twice"
+                );
+            }
+        }
+        assert!(checked > 50, "only {checked} FSTs accepted anything");
+    }
+
+    /// A transducer has no one string per path, so it is refused rather than
+    /// answered with one side of it.
+    #[test]
+    fn distinct_input_strings_takes_an_acceptor() {
+        let mut fst = StdVectorFst::new();
+        for _ in 0..2 {
+            fst.add_state();
+        }
+        fst.set_start(0);
+        fst.add_arc(0, StdArc::new(1, 2, TropicalWeight::one(), 1));
+        fst.set_final(1, TropicalWeight::one());
+        fst.properties(K_FST_PROPERTIES, true);
+
+        let mut out = StdVectorFst::new();
+        let err = shortest_path_unique(
+            &fst,
             &mut out,
             &ShortestPathOptions {
                 nshortest: 2,
-                unique: true,
                 ..Default::default()
             },
+            None,
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("not implemented"), "{err}");
+        assert!(format!("{err}").contains("acceptor"), "{err}");
     }
 }

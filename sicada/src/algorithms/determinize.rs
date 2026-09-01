@@ -185,6 +185,58 @@ impl<L: ArcLabel> Default for DeterminizeOptions<L> {
 /// subsets holding the same thing compare equal.
 type Subset<S, W> = Vec<(S, W)>;
 
+/// Where the distances go, when the caller asked for them.
+struct Distances<'a, W> {
+    /// How far each state of the *input* is from the final states.
+    to_final: &'a [W],
+    /// The same for each state built here, indexed by its state id.
+    out: &'a mut Vec<W>,
+}
+
+/// What a subset is worth: how far it is from the final states, given how far
+/// each of its members is.
+///
+/// Port of upstream's `DeterminizeFsaImpl::ComputeDistance`. A member past the
+/// end of `to_final` counts as unable to reach one, as it does there.
+fn subset_distance<S: ArcStateId, W: Weight>(subset: &Subset<S, W>, to_final: &[W]) -> W {
+    let mut out = W::zero();
+    for (state, weight) in subset {
+        let ind = to_final
+            .get(state.as_usize())
+            .cloned()
+            .unwrap_or_else(W::zero);
+        out = out.plus(&weight.times(&ind));
+    }
+    out
+}
+
+/// The state standing for `subset`, added if it is new.
+fn find_state<S, W>(
+    subsets: &mut CompactHashBiTable<usize, Subset<S, W>>,
+    pending: &mut Vec<usize>,
+    distances: &mut Option<Distances<'_, W>>,
+    subset: &Subset<S, W>,
+) -> usize
+where
+    S: ArcStateId,
+    W: Weight + std::hash::Hash + Eq,
+{
+    let before = subsets.size();
+    let id = subsets
+        .find_id(subset, true)
+        .expect("find_id inserts when asked to");
+    if id == before {
+        pending.push(id);
+        // Filled the moment a subset first becomes a state, as upstream does,
+        // which is what leaves `out` indexed by state id.
+        if let Some(distances) = distances.as_mut() {
+            let distance = subset_distance(subset, distances.to_final);
+            distances.out.push(distance);
+        }
+    }
+    id
+}
+
 /// Determinizes an acceptor.
 ///
 /// The weight has to be left divisible, since the arc weight is divided back out
@@ -195,6 +247,66 @@ pub fn determinize_fsa<A, D, F1, F2>(
     divisor: &D,
     delta: f32,
     max_states: Option<usize>,
+) -> Result<(), OpenFstError>
+where
+    A: Arc,
+    A::Weight: Divide + std::hash::Hash + Eq,
+    D: CommonDivisor<A::Weight>,
+    F1: Fst<A>,
+    F2: MutableFst<A>,
+{
+    determinize_fsa_impl(ifst, ofst, divisor, delta, max_states, None)
+}
+
+/// Determinizes an acceptor, reporting how far each state of the result is from
+/// the final states.
+///
+/// `in_dist[q]` is that distance for state `q` of the input; `out_dist` is
+/// filled with it for each state of the result, which is `⊕ w ⊗ in_dist[q]`
+/// over the subset `(q, w)` that state stands for.
+///
+/// It is done here because the subsets are gone afterwards: this costs one ⊗
+/// and one ⊕ per subset member, where asking later costs a shortest-distance
+/// pass over the larger result.
+/// [`shortest_path_unique`](super::shortest_path::shortest_path_unique) is the
+/// caller.
+pub fn determinize_fsa_with_distance<A, D, F1, F2>(
+    ifst: &F1,
+    ofst: &mut F2,
+    divisor: &D,
+    delta: f32,
+    max_states: Option<usize>,
+    in_dist: &[A::Weight],
+    out_dist: &mut Vec<A::Weight>,
+) -> Result<(), OpenFstError>
+where
+    A: Arc,
+    A::Weight: Divide + std::hash::Hash + Eq,
+    D: CommonDivisor<A::Weight>,
+    F1: Fst<A>,
+    F2: MutableFst<A>,
+{
+    out_dist.clear();
+    determinize_fsa_impl(
+        ifst,
+        ofst,
+        divisor,
+        delta,
+        max_states,
+        Some(Distances {
+            to_final: in_dist,
+            out: out_dist,
+        }),
+    )
+}
+
+fn determinize_fsa_impl<A, D, F1, F2>(
+    ifst: &F1,
+    ofst: &mut F2,
+    divisor: &D,
+    delta: f32,
+    max_states: Option<usize>,
+    mut distances: Option<Distances<'_, A::Weight>>,
 ) -> Result<(), OpenFstError>
 where
     A: Arc,
@@ -227,20 +339,8 @@ where
     let mut current: Subset<A::StateId, A::Weight> = Vec::new();
     let mut transitions: Vec<(A::Label, A::StateId, A::Weight)> = Vec::new();
 
-    let find_state = |subsets: &mut CompactHashBiTable<usize, Subset<A::StateId, A::Weight>>,
-                      pending: &mut Vec<usize>,
-                      subset: Subset<A::StateId, A::Weight>| {
-        let before = subsets.size();
-        let id = subsets
-            .find_id(&subset, true)
-            .expect("find_id inserts when asked to");
-        if id == before {
-            pending.push(id);
-        }
-        id
-    };
-
-    let start = find_state(&mut subsets, &mut pending, vec![(istart, A::Weight::one())]);
+    let initial: Subset<A::StateId, A::Weight> = vec![(istart, A::Weight::one())];
+    let start = find_state(&mut subsets, &mut pending, &mut distances, &initial);
     ofst.add_state();
     ofst.set_start(A::StateId::from_usize(start));
 
@@ -321,7 +421,7 @@ where
                 *weight = weight.divide(&arc_weight, DivideType::Left).quantize(delta);
             }
 
-            let next = find_state(&mut subsets, &mut pending, merged);
+            let next = find_state(&mut subsets, &mut pending, &mut distances, &merged);
             if max_states.is_some_and(|limit| subsets.size() > limit) {
                 return Err(OpenFstError::InvalidOperation(format!(
                     "Determinize: more than {} states; the FST may not be determinizable",
@@ -712,6 +812,83 @@ mod tests {
             .unwrap_err();
             assert!(format!("{err}").contains("not implemented"), "{err}");
         }
+    }
+
+    /// The distances it reports are the ones the result itself has.
+    ///
+    /// Recomputing them on the result is an oracle that shares no code with the
+    /// line inside the determinization that produces them.
+    #[test]
+    fn the_distances_it_reports_are_the_result_s_own() {
+        use crate::algorithms::shortest_distance::shortest_distance_reverse;
+
+        let mut rng = Rng::new(0x0000_D157_u64);
+        let mut checked = 0;
+        for round in 0..200 {
+            // `random_acyclic_fst` builds an acceptor, which is what
+            // `determinize_fsa` takes.
+            let fst = random_acyclic_fst(&mut rng, 6);
+            let in_dist = shortest_distance_reverse::<StdArc, _>(&fst, DELTA).unwrap();
+
+            let mut out = StdVectorFst::new();
+            let mut out_dist = Vec::new();
+            determinize_fsa_with_distance(
+                &fst,
+                &mut out,
+                &DefaultCommonDivisor,
+                DELTA,
+                Some(4096),
+                &in_dist,
+                &mut out_dist,
+            )
+            .unwrap();
+
+            assert_eq!(
+                out_dist.len(),
+                out.num_states(),
+                "round {round}: one distance per state"
+            );
+            if out.num_states() == 0 {
+                continue;
+            }
+            checked += 1;
+            // A state the reverse pass never reached cannot reach a final
+            // state, which is `zero`; comparing only the entries it returned
+            // would leave those states unchecked.
+            let want = shortest_distance_reverse::<StdArc, _>(&out, DELTA).unwrap();
+            for (state, got) in out_dist.iter().enumerate() {
+                let want = want
+                    .get(state)
+                    .cloned()
+                    .unwrap_or_else(TropicalWeight::zero);
+                assert!(
+                    got.approx_equal(&want, 1e-3),
+                    "round {round}, state {state}: {got} against {want}"
+                );
+            }
+        }
+        assert!(checked > 50, "only {checked} FSTs had any states");
+    }
+
+    /// Asking for distances over an input with no start state asks for none.
+    #[test]
+    fn an_empty_input_reports_no_distances() {
+        let mut out = StdVectorFst::new();
+        let mut out_dist = vec![TropicalWeight(7.0)];
+        determinize_fsa_with_distance(
+            &StdVectorFst::new(),
+            &mut out,
+            &DefaultCommonDivisor,
+            DELTA,
+            None,
+            &[],
+            &mut out_dist,
+        )
+        .unwrap();
+        assert!(
+            out_dist.is_empty(),
+            "the caller's vector is not appended to"
+        );
     }
 
     /// The single-letter divisor commits a letter only where the two agree.
