@@ -1,7 +1,7 @@
 //! Container types the FST algorithms are built on.
 
 pub mod bi_table;
-pub(crate) mod bit_set;
+pub mod bit_set;
 pub mod compact_set;
 pub(crate) mod fast_cell;
 pub mod indexed_heap;

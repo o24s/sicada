@@ -181,22 +181,29 @@ impl<A: Arc> ReplaceUtil<A> {
     /// Whether every FST is reachable from the root and has no useless states.
     pub fn connected(&mut self) -> bool {
         let props = K_ACCESSIBLE | K_CO_ACCESSIBLE;
-        let useful: Vec<bool> = self
-            .fsts
-            .iter()
-            .map(|fst| {
-                fst.as_ref()
-                    .is_none_or(|fst| fst.properties(props, true) == props)
-            })
-            .collect();
-        let present: Vec<bool> = self.fsts.iter().map(Option::is_some).collect();
-        let deps = self.dependencies(false);
-        for (index, ok) in useful.into_iter().enumerate() {
-            if present[index] && (!ok || !deps.access.contains(index)) {
-                return false;
+        // Taken before `dependencies` borrows `self`, which is why these are
+        // gathered rather than read inside the loop below.
+        let count = self.fsts.len();
+        let mut present = GrowableBitSet::with_capacity(count);
+        let mut useful = GrowableBitSet::with_capacity(count);
+        for (index, fst) in self.fsts.iter().enumerate() {
+            match fst {
+                // An absent FST has nothing useless in it.
+                None => {
+                    useful.insert(index);
+                }
+                Some(fst) => {
+                    present.insert(index);
+                    if fst.properties(props, true) == props {
+                        useful.insert(index);
+                    }
+                }
             }
         }
-        true
+        let deps = self.dependencies(false);
+        (0..count).all(|index| {
+            !present.contains(index) || (useful.contains(index) && deps.access.contains(index))
+        })
     }
 
     /// Removes the states, arcs and whole FSTs that no path through the network

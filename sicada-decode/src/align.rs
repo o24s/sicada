@@ -89,6 +89,7 @@
 use std::ops::Range;
 
 use sicada::arc::{Arc, ArcLabel, ArcStateId};
+use sicada::data_structures::bit_set::DenseBitSet;
 use sicada::error::OpenFstError;
 use sicada::fst::{Fst, MutableFst};
 use sicada::fsts::vector_fst::VectorFst;
@@ -521,16 +522,14 @@ impl Alignment {
     /// low enough to let a narrow beam reach the end skipped 19.7 % while
     /// scoring *better* acoustically, which is why [`align`] has no beam.
     pub fn skipped(&self) -> Vec<usize> {
-        let mut sounded = vec![false; self.num_phones];
+        let mut sounded = DenseBitSet::new_empty(self.num_phones);
         for &sounding in &self.sounding {
             if let Some(position) = (sounding as usize).checked_sub(1) {
-                sounded[position] = true;
+                sounded.insert(position);
             }
         }
-        sounded
-            .into_iter()
-            .enumerate()
-            .filter_map(|(position, sounded)| (!sounded).then_some(position))
+        (0..self.num_phones)
+            .filter(|&position| !sounded.contains(position))
             .collect()
     }
 

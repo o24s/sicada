@@ -26,6 +26,7 @@ use crate::algorithms::lookahead_matcher::{
 };
 use crate::arc::{Arc, ArcLabel};
 use crate::data_structures::bi_table::BiTableId;
+use crate::data_structures::bit_set::GrowableBitSet;
 use crate::data_structures::state_table::{
     ComposeStateTable, DefaultComposeStateTuple, GenericComposeStateTable,
 };
@@ -115,7 +116,8 @@ where
     ofst.set_start(start);
 
     let mut pending: Vec<A::StateId> = vec![start];
-    let mut done: Vec<bool> = vec![true];
+    let mut done = GrowableBitSet::new();
+    done.insert(start.as_usize());
     let zero = A::Weight::zero();
     let epsilon = A::Label::epsilon();
     let no_label = A::Label::no_label();
@@ -190,12 +192,10 @@ where
         // The state table may have grown; the result needs a state for each.
         while ofst.num_states() < states.size() {
             ofst.add_state();
-            done.push(false);
         }
         for arc in arcs.drain(..) {
             let next = arc.nextstate();
-            if !done[next.as_usize()] {
-                done[next.as_usize()] = true;
+            if done.insert(next.as_usize()) {
                 pending.push(next);
             }
             ofst.add_arc(state, arc);

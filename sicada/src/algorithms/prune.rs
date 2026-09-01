@@ -14,6 +14,7 @@ use std::rc::Rc;
 use crate::algorithms::shortest_distance::{SHORTEST_DELTA, shortest_distance_reverse};
 use crate::arc::{Arc, ArcStateId};
 use crate::arc_filter::{AnyArcFilter, ArcFilter};
+use crate::data_structures::bit_set::{DenseBitSet, GrowableBitSet};
 use crate::data_structures::indexed_heap::IndexedHeap;
 use crate::error::OpenFstError;
 use crate::fst::{ExpandedFst, Fst, MutableFst};
@@ -147,7 +148,7 @@ where
         Rc::clone(&fdistance),
     ));
     let mut keys: Vec<Option<usize>> = vec![None; nstates];
-    let mut visited = vec![false; nstates];
+    let mut visited = DenseBitSet::new_empty(nstates);
 
     let limit = {
         let fdistance = fdistance.borrow();
@@ -170,7 +171,7 @@ where
     while let Some(state) = heap.pop() {
         let index = state.as_usize();
         keys[index] = None;
-        visited[index] = true;
+        visited.insert(index);
 
         let here = idistance.borrow()[index].clone();
         if natural_less(&limit, &here.times(&fst.final_weight(state))) {
@@ -203,7 +204,7 @@ where
                     idistance[next] = to_here;
                 }
             }
-            if visited[next] {
+            if visited.contains(next) {
                 continue;
             }
             if opts
@@ -229,7 +230,7 @@ where
     }
 
     let dead: Vec<A::StateId> = (0..nstates)
-        .filter(|index| !visited[*index])
+        .filter(|index| !visited.contains(*index))
         .map(A::StateId::from_usize)
         .collect();
     fst.delete_states(&dead);
@@ -290,7 +291,7 @@ where
         None => &mut local,
     };
     let mut keys: Vec<Option<usize>> = Vec::new();
-    let mut visited: Vec<bool> = Vec::new();
+    let mut visited = GrowableBitSet::new();
 
     /// Grows a vector until `index` is inside it.
     fn ensure<T: Clone>(vector: &mut Vec<T>, index: usize, fill: T) {
@@ -315,13 +316,12 @@ where
     ensure(&mut idistance.borrow_mut(), start_index, A::Weight::zero());
     idistance.borrow_mut()[start_index] = A::Weight::one();
     ensure(&mut keys, start_index, None);
-    ensure(&mut visited, start_index, false);
     keys[start_index] = Some(heap.insert(start));
 
     while let Some(state) = heap.pop() {
         let index = state.as_usize();
         keys[index] = None;
-        visited[index] = true;
+        visited.insert(index);
         let here = idistance.borrow()[index].clone();
         let from = copy[index].expect("a state on the heap has been copied");
 
@@ -364,8 +364,7 @@ where
             );
 
             ensure(&mut keys, next, None);
-            ensure(&mut visited, next, false);
-            if visited[next] {
+            if visited.contains(next) {
                 continue;
             }
             match keys[next] {

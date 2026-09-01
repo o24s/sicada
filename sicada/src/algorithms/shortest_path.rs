@@ -25,6 +25,7 @@ use crate::algorithms::shortest_distance::{
 };
 use crate::arc::{Arc, ArcLabel, ArcStateId};
 use crate::arc_filter::AnyArcFilter;
+use crate::data_structures::bit_set::GrowableBitSet;
 use crate::data_structures::indexed_heap::IndexedHeap;
 use crate::error::OpenFstError;
 use crate::fst::{ExpandedFst, Fst, MutableFst};
@@ -121,14 +122,13 @@ where
     };
     queue.clear();
 
-    let mut enqueued: Vec<bool> = Vec::new();
+    let mut enqueued = GrowableBitSet::new();
     // How far the three parallel vectors have been grown. Only `ensure` grows
     // them, so keeping the length here turns the check that runs once per arc
     // into a comparison instead of a `RefCell` borrow.
     let mut grown = 0usize;
     let ensure = |distance: &Distance<A::Weight>,
                   parent: &mut Vec<Parent<A::StateId>>,
-                  enqueued: &mut Vec<bool>,
                   grown: &mut usize,
                   index: usize| {
         if index < *grown {
@@ -138,15 +138,14 @@ where
         while distance.len() <= index {
             distance.push(A::Weight::zero());
             parent.push(Parent::none());
-            enqueued.push(false);
         }
         *grown = distance.len();
     };
 
     let source_index = source.as_usize();
-    ensure(distance, parent, &mut enqueued, &mut grown, source_index);
+    ensure(distance, parent, &mut grown, source_index);
     distance.borrow_mut()[source_index] = A::Weight::one();
-    enqueued[source_index] = true;
+    enqueued.insert(source_index);
     queue.enqueue(source);
 
     let zero = A::Weight::zero();
@@ -156,8 +155,8 @@ where
 
     while let Some(state) = queue.dequeue() {
         let index = state.as_usize();
-        ensure(distance, parent, &mut enqueued, &mut grown, index);
-        enqueued[index] = false;
+        ensure(distance, parent, &mut grown, index);
+        enqueued.remove(index);
         let here = distance.borrow()[index].clone();
 
         // With a shortest-first queue nothing still waiting can beat what has
@@ -184,7 +183,7 @@ where
 
         for (position, arc) in ifst.arcs(state).enumerate() {
             let next = arc.nextstate().as_usize();
-            ensure(distance, parent, &mut enqueued, &mut grown, next);
+            ensure(distance, parent, &mut grown, next);
             let weight = here.times(arc.weight());
             // One borrow for the read and the write together: the queue is only
             // touched after it is dropped, so nothing else can be looking.
@@ -207,11 +206,11 @@ where
                 from: state,
                 position: position as u32,
             };
-            if enqueued[next] {
+            if enqueued.contains(next) {
                 queue.update(arc.nextstate());
             } else {
                 queue.enqueue(arc.nextstate());
-                enqueued[next] = true;
+                enqueued.insert(next);
             }
         }
     }

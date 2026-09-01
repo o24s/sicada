@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use crate::arc::{Arc, ArcStateId};
 use crate::arc_filter::{AnyArcFilter, ArcFilter};
+use crate::data_structures::bit_set::GrowableBitSet;
 use crate::error::OpenFstError;
 use crate::fst::Fst;
 use crate::fsts::vector_fst::VectorFst;
@@ -88,7 +89,7 @@ pub struct ShortestDistanceState<W: Weight, S> {
     adder: Vec<Adder<W>>,
     /// What each state has gained since it was last expanded.
     residual: Vec<Adder<W>>,
-    enqueued: Vec<bool>,
+    enqueued: GrowableBitSet,
     /// Which run last wrote each entry, or [`NO_RUN`] for none.
     sources: Vec<usize>,
     /// How far the buffers have been grown.
@@ -113,7 +114,7 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
         Self {
             adder: Vec::new(),
             residual: Vec::new(),
-            enqueued: Vec::new(),
+            enqueued: GrowableBitSet::new(),
             sources: Vec::new(),
             grown: 0,
             run: 0,
@@ -154,7 +155,6 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
             distance.push(W::zero());
             self.adder.push(Adder::new());
             self.residual.push(Adder::new());
-            self.enqueued.push(false);
         }
         self.grown = distance.len();
         if self.retain {
@@ -172,7 +172,7 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
         distance.borrow_mut()[index] = W::zero();
         self.adder[index].reset(W::zero());
         self.residual[index].reset(W::zero());
-        self.enqueued[index] = false;
+        self.enqueued.remove(index);
         self.sources[index] = self.run;
     }
 
@@ -228,7 +228,7 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
             distance.borrow_mut().reserve(nstates);
             self.adder.reserve(nstates);
             self.residual.reserve(nstates);
-            self.enqueued.reserve(nstates);
+            self.enqueued.ensure(nstates);
         }
 
         let source = opts.source.map_or(start, A::StateId::from_usize);
@@ -238,7 +238,7 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
         distance.borrow_mut()[source_index] = W::one();
         self.adder[source_index].reset(W::one());
         self.residual[source_index].reset(W::one());
-        self.enqueued[source_index] = true;
+        self.enqueued.insert(source_index);
         queue.enqueue(source);
 
         let zero = W::zero();
@@ -248,7 +248,7 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
             if opts.first_path && fst.final_weight(state) != zero {
                 break;
             }
-            self.enqueued[index] = false;
+            self.enqueued.remove(index);
             let r = self.residual[index].sum();
             self.residual[index].reset(W::zero());
 
@@ -281,11 +281,11 @@ impl<W: Weight, S: ArcStateId> ShortestDistanceState<W, S> {
                         "ShortestDistance: the relaxation left the semiring".into(),
                     ));
                 }
-                if self.enqueued[next] {
+                if self.enqueued.contains(next) {
                     queue.update(arc.nextstate());
                 } else {
                     queue.enqueue(arc.nextstate());
-                    self.enqueued[next] = true;
+                    self.enqueued.insert(next);
                 }
             }
         }
