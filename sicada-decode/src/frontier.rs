@@ -62,8 +62,6 @@ impl DecodeOptions {
     }
 }
 
-/// Records `cost` at `state` if it beats what is already there, reporting
-/// whether it did.
 #[inline]
 pub(crate) fn relax_cost<S: std::hash::Hash + Eq>(
     frontier: &mut FxHashMap<S, Token>,
@@ -84,10 +82,7 @@ pub(crate) fn relax_cost<S: std::hash::Hash + Eq>(
     }
 }
 
-/// Drops what the beam and the cap exclude, and returns the cutoff used.
-///
-/// `costs` is scratch the caller owns so that pruning allocates nothing per
-/// frame.
+// `costs` is caller-owned scratch space so pruning allocates nothing per frame.
 pub(crate) fn prune<S: std::hash::Hash + Eq>(
     frontier: &mut FxHashMap<S, Token>,
     opts: &DecodeOptions,

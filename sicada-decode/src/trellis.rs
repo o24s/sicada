@@ -7,12 +7,10 @@
 //! position by a bounded number of places, and the path starts at position 0 and
 //! ends at position `N`. Nothing else about the chain matters to the search.
 //!
-//! That shape is why the search can be exact rather than pruned, and it is worth
-//! not rewriting. This module holds the parts that are fiddly to get right: the
-//! band of reachable cells and its off-by-ones, the traceback packed to the bits
-//! a code actually needs, the two score rows and the discipline that lets them
-//! be reused, and a numerically careful ⊕ in the log semiring. The part that is
-//! *yours* is left to a trait.
+//! That shape permits exact rather than pruned search. This module provides the
+//! reachable-cell band, packed traceback, reusable score rows and a numerically
+//! careful ⊕ in the log semiring. A [`Trellis`] implementation supplies the
+//! transition topology and costs.
 //!
 //! | fixed | free |
 //! |---|---|
@@ -91,9 +89,7 @@
 //!
 //! There is no beam here and no place to put one. The band is the set of cells
 //! a complete path can stand in at all, so leaving out the rest costs nothing;
-//! narrowing it further would be a search decision, and
-//! [`align`](mod@crate::align) exists because that decision fails silently. See
-//! that module for the measurements.
+//! narrowing it further would make the result approximate.
 
 use std::ops::Range;
 
@@ -669,9 +665,9 @@ fn check_degree(degree: usize) -> Result<(), OpenFstError> {
 /// domain the same gap makes ⊕ its own smaller argument to within 4e-18 nats,
 /// against an `f32` step of 8e-6 at the magnitudes these costs reach.
 ///
-/// This is emphatically not a beam. It decides nothing, no answer moves if it
-/// is changed, and it cannot be tuned into being wrong; it is the point past
-/// which the arithmetic has already stopped. Everything above it is summed.
+/// This is a numerical cutoff, not a search beam: terms within this distance of
+/// the pivot are summed, while more distant terms cannot affect an `f32`
+/// result.
 pub const NEGLIGIBLE: f32 = 40.0;
 
 /// The log semiring's ⊕ over the transitions into one cell, and the share each
@@ -742,13 +738,10 @@ fn log_sum<const DEGREE: usize>(terms: &[f32; DEGREE]) -> Folded<DEGREE> {
     }
 }
 
-/// Which transition each cell took, packed to the bits a code needs.
-///
-/// SICADA-OPT: a byte a cell is the obvious layout and what k2 spends. Four
-/// transitions fit in two bits, so a ten-minute utterance against a
-/// 5 385-phone reference costs 41 MB rather than 163 MB. The plane is written
-/// once per cell and read once, so this is the memory traffic an alignment
-/// costs.
+// Which transition each cell took, packed to the bits a code needs.
+//
+// SICADA-OPT: k2 stores one byte per cell. Packing each code to the minimum
+// divisor of eight reduces both traceback storage and memory traffic.
 struct Traceback {
     plane: Vec<u8>,
     stride: usize,
@@ -847,10 +840,10 @@ impl RowWriter<'_> {
 mod tests {
     use super::*;
 
-    /// The chain of `align`, written out again against a plain matrix, so that
-    /// this module's tests do not depend on that one's.
-    ///
-    /// Codes, best-first: hold the blank, hold the phone, commit, skip.
+    // The chain of `align`, written out again against a plain matrix, so that
+    // this module's tests do not depend on that one's.
+    //
+    // Codes, best-first: hold the blank, hold the phone, commit, skip.
     struct Chain<'a> {
         scores: &'a [f32],
         symbols: usize,
@@ -951,8 +944,8 @@ mod tests {
         );
     }
 
-    /// The order the transitions are listed in is the tie-break, and callers
-    /// depend on it: a skip listed last never wins one.
+    // The order the transitions are listed in is the tie-break, and callers
+    // depend on it: a skip listed last never wins one.
     #[test]
     fn the_order_transitions_are_listed_in_is_the_tie_break() {
         // Every column costs the same, so all four transitions tie wherever
@@ -977,9 +970,7 @@ mod tests {
         assert!(!path.codes().contains(&HOLD_PHONE));
     }
 
-    /// What the module is for: a caller's own topology, solved without its own
-    /// solver. This one gives up a *word*, three positions at once, which needs
-    /// a reach of more than one.
+    // Exercise a custom topology that skips a three-position word.
     #[test]
     fn a_trellis_that_advances_more_than_one_position() {
         struct Words<'a> {
@@ -1105,8 +1096,8 @@ mod tests {
         }
     }
 
-    /// A row written only over part of its width, as a band writes it, still
-    /// reads back where it was written.
+    // A row written only over part of its width, as a band writes it, still
+    // reads back where it was written.
     #[test]
     fn a_partial_row_reads_back() {
         let mut trace = Traceback::new(1, 20, 4).unwrap();
@@ -1120,7 +1111,7 @@ mod tests {
         }
     }
 
-    /// A small xorshift, so the random cases below are the same every run.
+    // A small xorshift, so the random cases below are the same every run.
     struct Rng(u64);
 
     impl Rng {
@@ -1138,7 +1129,7 @@ mod tests {
         }
     }
 
-    /// Every path of the chain, enumerated and weighed, against both solvers.
+    // Every path of the chain, enumerated and weighed, against both solvers.
     #[test]
     fn both_solvers_agree_with_enumerating_every_path() {
         fn walk(chain: &Chain<'_>, frame: usize, position: usize, cost: f32, paths: &mut Vec<f32>) {
@@ -1211,8 +1202,8 @@ mod tests {
         assert!(compared > 150, "only {compared} rounds had a path");
     }
 
-    /// What a visitor is handed has to name a transition that is actually
-    /// there, and the mass of one frame has to come to one.
+    // What a visitor is handed has to name a transition that is actually
+    // there, and the mass of one frame has to come to one.
     #[test]
     fn every_frames_visits_come_to_one() {
         let mut rng = Rng(0x1DEA_5EED_9876_4321);
@@ -1241,7 +1232,7 @@ mod tests {
         }
     }
 
-    /// The contract, run as the checker a caller is told to run.
+    // The contract, run as the checker a caller is told to run.
     #[test]
     fn the_chain_obeys_the_contract() {
         let scores: Vec<f32> = (0..5 * 4).map(|i| i as f32 / 3.0).collect();
@@ -1255,8 +1246,6 @@ mod tests {
         axioms::check(&chain(&scores, &[]));
     }
 
-    /// The checker has to fail on a trellis that is actually wrong, or it is
-    /// only decorative.
     #[test]
     #[should_panic(expected = "backwards but")]
     fn it_catches_a_backward_reading_that_disagrees() {
@@ -1347,8 +1336,8 @@ mod tests {
         axioms::check(&OffTheFront);
     }
 
-    /// The derived reading is the point of the default, so it has to be the one
-    /// a careful implementation would have written.
+    // The derived reading is the point of the default, so it has to be the one
+    // a careful implementation would have written.
     #[test]
     fn the_derived_backward_reading_is_the_written_one() {
         let scores: Vec<f32> = (0..6 * 4).map(|i| (i % 7) as f32 / 2.0).collect();

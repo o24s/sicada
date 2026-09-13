@@ -314,8 +314,8 @@ mod tests {
         ]
     }
 
-    /// A weight's `properties()` bits are a claim every algorithm downstream
-    /// acts on, so they are checked rather than asserted.
+    // A weight's `properties()` bits are a claim every algorithm downstream
+    // acts on, so they are checked rather than asserted.
     #[test]
     fn it_is_the_semiring_it_says_it_is() {
         axioms::check(&samples());
@@ -333,8 +333,8 @@ mod tests {
         ]);
     }
 
-    /// The name goes into an FST file header, and a lattice written here is
-    /// meant to be one Kaldi reads.
+    // The name goes into an FST file header, and a lattice written here is
+    // meant to be one Kaldi reads.
     #[test]
     fn its_type_name_is_kaldis() {
         assert_eq!(LatticeWeight::type_name().as_str(), "lattice4");
@@ -349,9 +349,9 @@ mod tests {
         assert_eq!(dear.plus(&cheap), cheap);
     }
 
-    /// The tie-break keeps ⊕ a function rather than a coin toss: two paths of
-    /// the same total but a different split have to resolve the same way
-    /// whichever order they arrive in.
+    // The tie-break keeps ⊕ a function rather than a coin toss: two paths of
+    // the same total but a different split have to resolve the same way
+    // whichever order they arrive in.
     #[test]
     fn a_tie_on_the_total_is_broken_on_the_graph_cost() {
         let graph_heavy = LatticeWeight::new(3.0, 1.0);
@@ -369,8 +369,8 @@ mod tests {
         assert_eq!(a.times(&b).total_scaled(0.1), 1.5 + 0.225);
     }
 
-    /// A half-infinite weight would be a second zero: equal to `zero()` under
-    /// every operation but not under `==`.
+    // A half-infinite weight would be a second zero: equal to `zero()` under
+    // every operation but not under `==`.
     #[test]
     fn only_a_wholly_infinite_weight_is_a_member() {
         assert!(LatticeWeight::zero().is_member());
@@ -393,8 +393,8 @@ mod tests {
         );
     }
 
-    /// `Eq` demands reflexivity, and `determinize` keys subsets on weights, so
-    /// a weight that did not equal itself would quietly split a subset in two.
+    // `Eq` demands reflexivity, and `determinize` keys subsets on weights, so
+    // a weight that did not equal itself would quietly split a subset in two.
     #[test]
     fn a_weight_equals_itself_even_when_it_is_not_one() {
         use std::collections::HashSet;
@@ -407,9 +407,9 @@ mod tests {
         assert!(!seen.insert(LatticeWeight::new(1.0, 2.0)));
     }
 
-    /// Upstream writes both halves as `f32` whatever the precision, so that a
-    /// lattice written in double is readable in single. The file cannot say
-    /// which it was.
+    // Upstream writes both halves as `f32` whatever the precision, so that a
+    // lattice written in double is readable in single. The file cannot say
+    // which it was.
     #[test]
     fn it_writes_two_floats_whatever_its_precision() {
         use sicada::weight::WeightIo;

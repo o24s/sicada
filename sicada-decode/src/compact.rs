@@ -228,13 +228,12 @@ impl Default for PrunedDeterminizeOptions {
 /// A collapsed lattice, and the beam it took to get one.
 #[derive(Debug, Clone)]
 pub struct PrunedLattice<L: ArcLabel, S: ArcStateId> {
-    /// The lattice.
+    /// The determinized compact lattice.
     pub lattice: VectorFst<ArcTpl<CompactLatticeWeight<L>, L, S>>,
     /// The beam actually used, which is `opts.beam` unless it had to narrow.
     ///
-    /// Worth looking at: a lattice narrowed to a quarter of what was asked for
-    /// still holds the best path, but it holds fewer alternatives than the
-    /// caller planned to rescore.
+    /// A narrower beam preserves the best path but may remove alternatives that
+    /// a caller intended to rescore.
     pub beam: f32,
     /// How many attempts ran away before one finished.
     pub narrowed: usize,
@@ -330,10 +329,10 @@ mod tests {
         }
     }
 
-    /// Every word sequence the FST accepts, with the best cost for each.
-    ///
-    /// Only usable on an acyclic FST, as the lattices below are: their states
-    /// are `(frame, graph state)` and no arc goes back a frame.
+    // Every word sequence the FST accepts, with the best cost for each.
+    //
+    // Only usable on an acyclic FST, as the lattices below are: their states
+    // are `(frame, graph state)` and no arc goes back a frame.
     fn word_sequences<W, F>(fst: &F) -> FxHashMap<Vec<i32>, f32>
     where
         W: Weight,
@@ -365,8 +364,8 @@ mod tests {
         found
     }
 
-    /// The one number a path's weight comes down to, whichever of the two
-    /// lattice semirings it is in.
+    // The one number a path's weight comes down to, whichever of the two
+    // lattice semirings it is in.
     trait TotalCost {
         fn total_cost(&self) -> f32;
     }
@@ -383,9 +382,9 @@ mod tests {
         }
     }
 
-    /// A graph with no input epsilons, so the lattice comes out acyclic and can
-    /// be enumerated. Output epsilons are plentiful, so the alignments
-    /// collapse.
+    // A graph with no input epsilons, so the lattice comes out acyclic and can
+    // be enumerated. Output epsilons are plentiful, so the alignments
+    // collapse.
     fn random_graph(rng: &mut Rng, symbols: usize) -> StdVectorFst {
         let states = 1 + rng.below(4);
         let mut graph: StdVectorFst = VectorFst::new();
@@ -427,9 +426,7 @@ mod tests {
         lattice_decode(graph, &dense, &LatticeDecodeOptions::exhaustive()).unwrap()
     }
 
-    /// The statement that matters: determinizing changes which alignments are
-    /// kept, and nothing else. Every word sequence the lattice had is still
-    /// there, at the same cost, and no new one appeared.
+    // Compare complete word-to-cost maps, not only the best path.
     #[test]
     fn it_keeps_every_word_sequence_at_the_same_cost() {
         let symbols = 3;
@@ -471,13 +468,13 @@ mod tests {
         assert!(compared > 80, "only {compared} rounds produced a lattice");
     }
 
-    /// Every path's `(cost, alignment)`, folded per word sequence by the
-    /// semiring's own ⊕.
-    ///
-    /// That fold *is* the specification: ⊕ keeps the better cost's alignment
-    /// whole, and breaks a tie on the shorter one. Writing the oracle as the
-    /// fold rather than as "take the minimum cost" makes it check the alignment
-    /// half too, ties included.
+    // Every path's `(cost, alignment)`, folded per word sequence by the
+    // semiring's own ⊕.
+    //
+    // That fold *is* the specification: ⊕ keeps the better cost's alignment
+    // whole, and breaks a tie on the shorter one. Writing the oracle as the
+    // fold rather than as "take the minimum cost" makes it check the alignment
+    // half too, ties included.
     fn best_per_sequence<W, F>(fst: &F) -> FxHashMap<Vec<i32>, CompactLatticeWeight<i32>>
     where
         W: Weight + AsCompact,
@@ -513,11 +510,11 @@ mod tests {
         found
     }
 
-    /// A path's weight as the compact semiring sees it.
-    ///
-    /// Only the compact weight implements it: the enumeration runs over
-    /// [`to_compact`]'s output, which is the raw lattice with each arc's frame
-    /// already moved into its weight and nothing else changed.
+    // A path's weight as the compact semiring sees it.
+    //
+    // Only the compact weight implements it: the enumeration runs over
+    // [`to_compact`]'s output, which is the raw lattice with each arc's frame
+    // already moved into its weight and nothing else changed.
     trait AsCompact {
         fn as_compact(&self) -> CompactLatticeWeight<i32>;
     }
@@ -528,9 +525,9 @@ mod tests {
         }
     }
 
-    /// The alignment half is the point, so it is checked and not only the cost:
-    /// each word sequence must come back with the *best-scoring* alignment the
-    /// lattice had for it, chosen by the same ⊕ the semiring defines.
+    // The alignment half is the point, so it is checked and not only the cost:
+    // each word sequence must come back with the *best-scoring* alignment the
+    // lattice had for it, chosen by the same ⊕ the semiring defines.
     #[test]
     fn it_keeps_the_best_alignment_for_each_word_sequence() {
         let symbols = 3;
@@ -574,7 +571,7 @@ mod tests {
         assert!(compared > 80, "only {compared} rounds produced a lattice");
     }
 
-    /// What "compact" buys: one arc per word, and one path per word sequence.
+    // What "compact" buys: one arc per word, and one path per word sequence.
     #[test]
     fn each_word_sequence_is_a_single_path() {
         let symbols = 3;
@@ -638,8 +635,8 @@ mod tests {
         paths
     }
 
-    /// The frames a word spanned have to survive. A second pass rescores them,
-    /// and an alignment is read from them.
+    // The frames a word spanned have to survive. A second pass rescores them,
+    // and an alignment is read from them.
     #[test]
     fn the_alignment_travels_with_the_word() {
         // Three frames, one symbol each, all mapping to the same word 10.
@@ -691,9 +688,9 @@ mod tests {
         assert!(weight.weight().total().abs() < 1e-6, "{weight}");
     }
 
-    /// A compact lattice is an FST like any other, so it writes and reads like
-    /// one, and the header it writes carries Kaldi's names, which is why the
-    /// weight's `type_name` was matched to upstream.
+    // A compact lattice is an FST like any other, so it writes and reads like
+    // one, and the header it writes carries Kaldi's names, which is why the
+    // weight's `type_name` was matched to upstream.
     #[test]
     fn it_writes_and_reads_back_as_an_fst() {
         use sicada::fst::{FstReadOptions, FstWriteOptions};
@@ -744,8 +741,7 @@ mod tests {
         }
     }
 
-    /// The whole point of narrowing: a lattice determinization that runs away
-    /// finishes anyway, at a smaller beam, and says so.
+    // A failed attempt must retry with a narrower beam and report that beam.
     #[test]
     fn it_narrows_the_beam_rather_than_giving_up() {
         let symbols = 3;
@@ -779,8 +775,8 @@ mod tests {
         assert_eq!(fine.beam, PrunedDeterminizeOptions::default().beam);
     }
 
-    /// Narrowing keeps the best path, which makes it a safe answer to running
-    /// away rather than a wrong one.
+    // Narrowing keeps the best path, which makes it a safe answer to running
+    // away rather than a wrong one.
     #[test]
     fn narrowing_never_loses_the_best_path() {
         let symbols = 3;

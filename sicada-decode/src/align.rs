@@ -1,12 +1,10 @@
-//! Forced alignment against a reference, solved exactly.
+//! Exact forced alignment against a known reference.
 //!
-//! Alignment is decoding with the answer already known. The reference is a flat
-//! sequence of `N` phones, the acoustic model has scored `T` frames, and the
-//! only question left is which frames each phone occupies. The graph is
-//! therefore a single chain rather than a lattice of everything that could have
-//! been said, and a search over one chain is small enough to do exactly.
+//! The reference is a sequence of `N` phone columns and the acoustic model has
+//! scored `T` frames. Alignment assigns frames to phones by searching a single
+//! chain rather than a lattice of possible transcripts.
 //!
-//! # The chain
+//! # Chain topology
 //!
 //! States `s_0 … s_N`, where `s_i` means "the first `i` phones are behind us".
 //! `s_0` is the start, `s_N` is the only final state, and four transitions
@@ -19,72 +17,26 @@
 //! | commit | phone `i + 1` | `s_{i+1}` | 0 | phone `i + 1` starts in this frame |
 //! | skip | blank | `s_{i+1}` | `skip(i + 1)` | phone `i + 1` never happens |
 //!
-//! The skip transition makes the reference advisory rather than binding: a line
-//! of the script that went unspoken, or a verse the singer dropped, costs `skip`
-//! per phone instead of forcing the rest of the alignment to absorb it.
-//! [`AlignChain::new`] forbids skipping, and a caller opts in per phone, because
-//! the cost is a property of the phone rather than of the aligner. See
-//! [`AlignChain::with_skip_costs`].
+//! A skip makes a phone optional at a caller-supplied cost. Skipping is disabled
+//! by default; see [`AlignChain::with_skip_costs`].
 //!
-//! # Why the emission matrix is not widened
+//! # Exact search
 //!
-//! Two transitions out of `s_i` read the blank column and two read a phone
-//! column, so the chain is *non-deterministic on its input labels*: from one
-//! state, two different arcs carry the same label. A decoder that indexes the
-//! emissions by arc label rather than by column cannot express that, and has to
-//! be handed a matrix widened to one column per arc, `T × (C + 2N)` instead of
-//! `T × C`. For a ten-minute utterance against a 5 385-phone reference that is
-//! 1.22 GiB, and 2.44 GiB once it is copied. Every added column is a duplicate:
-//! a skip channel *is* the blank column, and position `i`'s repeat channel *is*
-//! `phone(i)`'s.
+//! Every transition consumes one frame and advances at most one phone. A path
+//! of `T` frames can therefore occupy position `i` at frame `t` only when
+//! `t - (T - N) <= i <= t`. [`band`](crate::trellis::band) covers exactly those
+//! reachable cells, so [`align`] needs no beam or pruning threshold.
 //!
-//! Nothing here pays that cost. [`align`] reads columns out of
-//! [`DenseFst::frame`](crate::dense::DenseFst::frame) directly and never forms
-//! a label at all, and [`AlignChain::to_fst`], which does form labels, is still
-//! read column-wise by [`viterbi_decode`](crate::viterbi::viterbi_decode).
-//! sicada's decoders ask the matrix which column an arc names, rather than
-//! requiring the matrix to be reshaped to suit the arcs.
+//! The solver reads the original acoustic columns directly. It does not widen
+//! the score matrix to distinguish transitions that read the same phone or
+//! blank column, and it stores the four transition codes in two bits each.
 //!
-//! # Why there is no beam
+//! # Custom topologies
 //!
-//! Because every transition consumes one frame and advances at most one phone,
-//! a path of `T` frames stands at position `i` in frame `t` only when
-//! `t - (T - N) ≤ i ≤ t`, and [`band`](crate::trellis::band) fills exactly
-//! those cells. That is not a beam but the set of cells that lie on a complete
-//! path at all, so the search is exhaustive and there is nothing to tune.
-//!
-//! It is also the cheaper of the two. The four transitions into a cell fit in
-//! two bits, so the whole traceback for the ten-minute case is
-//! `30 241 × 5 386 / 4 = 41 MB`, alongside two rows of scores at 43 KB. A
-//! *pruned* search over the same chain keeps a token per surviving state per
-//! frame, or `T × max_active × 24 B`, which at k2's default of 30 000 active
-//! states is 21.8 GiB, which does not fit on a 30 GiB machine.
-//!
-//! Being exact removes a failure mode as well as the memory. A beam narrow
-//! enough to finish quickly has to be paid for with a smaller skip cost, and a
-//! smaller skip cost *improves the acoustic score*, since every phone given up
-//! is a frame explained by the blank instead. On the ten-minute case a beam of
-//! 25 with the skip cost dropped to 0.75 reached the end, scored better than the
-//! right answer (0.273 against 0.354 nats per frame), and lost the times of
-//! 19.7 % of the reference without reporting anything. Nothing inside the
-//! decoder can distinguish the two cases, so the fix is not to have the knob.
-//!
-//! # When the chain is not the shape you want
-//!
-//! A real alignment usually wants something this chain does not have: a whole
-//! word given up at once rather than a phone at a time, a phone that has to
-//! last two frames, a penalty that leans on a voice-activity detector frame by
-//! frame. None of that needs a new solver.
-//!
-//! Everything above the phones lives in [`trellis`](crate::trellis), which takes
-//! the transitions entering a cell (how many there are, what each costs, what it
-//! means) and supplies the band, the packed traceback and the forward-backward.
-//! [`AlignChain`] is one implementation of that trait and [`ChainTrellis`] is
-//! where to read it; [`align`] is [`best_path`] over
-//! it plus the reading-back that turns codes into phones. A caller with their
-//! own topology writes the trait and keeps the rest, and a caller who wants this
-//! chain's raw path calls [`AlignChain::against`] and
-//! [`best_path`] themselves.
+//! [`trellis`](crate::trellis) supplies the banded Viterbi and forward-backward
+//! solvers independently of this chain. Implement [`Trellis`] for constraints
+//! such as minimum duration or multi-phone skips. [`AlignChain::against`]
+//! exposes this module's trellis when the raw [`Path`] or posteriors are needed.
 
 use std::ops::Range;
 
@@ -99,8 +51,7 @@ use sicada::weight::Weight;
 use crate::dense::{DenseFst, FromScore};
 use crate::trellis::{Path, ReversibleTrellis, Step, Trellis, best_path};
 
-/// Whether each of the chain's four transitions sounds the phone of the
-/// position it lands in, indexed by code.
+// Whether each transition sounds the phone at its destination, indexed by code.
 const SOUNDS: [bool; 4] = [false, true, true, false];
 
 /// A reference to align: the phones in order, and what each one costs to give
@@ -141,16 +92,8 @@ impl AlignChain {
     /// only when keeping it costs strictly more, so the number that matters is
     /// how much acoustic evidence the phone is worth.
     ///
-    /// The cost belongs to the phone rather than to the utterance. In the
-    /// reference measurements a Japanese `cl`, the closure of a geminate, is set
-    /// to 1.0 against 6.0 for everything else, because it *is* silence and so no
-    /// positive evidence for it can exist even in principle. Over 80 read
-    /// utterances that fires zero times and moves no boundary in the third
-    /// decimal, while over four sung ones it fires 113 times.
-    ///
-    /// Widening it to the pause phones is the tempting next step, and it is a
-    /// mistake: in one song it cost 35 of 37 punctuation marks their times,
-    /// against 1 with `cl` alone, for no measurable gain.
+    /// Skip costs belong to individual phones rather than to the utterance as a
+    /// whole, so callers can make only the appropriate positions optional.
     ///
     /// # Errors
     ///
@@ -451,15 +394,8 @@ impl Alignment {
     /// The frames each position occupies, as `[first frame sounding it, last
     /// frame sounding it + 1)`, or `None` for a position no frame sounded.
     ///
-    /// **Frames left blank belong to no phone.** The other convention, that a
-    /// phone owns everything up to the next one, measures the same to within
-    /// the accuracy of phone boundaries themselves (against the labels shipped
-    /// with the PJS corpus, n = 754, both put the median onset error at 49 ms
-    /// and the offset error at 53 against 57 ms), but it breaks at the end of a
-    /// line. Where silence or an interlude follows, the line's last phone
-    /// swallows the whole gap, measured at 2.1 s: in silence the model scores
-    /// the blank and a pause alike, so Viterbi has no reason to commit the pause
-    /// early.
+    /// Frames assigned to the blank belong to no phone. In particular, trailing
+    /// silence is not included in the last phone's span.
     pub fn spans(&self) -> Vec<Option<Range<usize>>> {
         let mut spans = vec![None; self.num_phones];
         for (frame, &sounding) in self.sounding.iter().enumerate() {
@@ -483,9 +419,7 @@ impl Alignment {
     /// blanks in between, since a word does not stop existing because it has a
     /// pause in the middle of it.
     ///
-    /// A group every phone of which was given up has no span at all. That case is
-    /// worth handling rather than papering over: a line with no time is a line
-    /// that was not sung.
+    /// A group whose phones were all skipped has no span.
     ///
     /// # Errors
     ///
@@ -515,12 +449,7 @@ impl Alignment {
         Ok(grouped)
     }
 
-    /// The positions no frame sounded: the phones the alignment gave up.
-    ///
-    /// Their share of the reference is the diagnostic that matters. On the
-    /// reference material a correct alignment skips about 1 %; a skip cost
-    /// low enough to let a narrow beam reach the end skipped 19.7 % while
-    /// scoring *better* acoustically, which is why [`align`] has no beam.
+    /// The positions that took a skip transition and received no frame.
     pub fn skipped(&self) -> Vec<usize> {
         let mut sounded = DenseBitSet::new_empty(self.num_phones);
         for &sounding in &self.sounding {
@@ -562,12 +491,9 @@ impl Alignment {
     /// The mean of [`acoustic_costs`](Self::acoustic_costs), or `0.0` for no
     /// frames.
     ///
-    /// This is the one automatic warning that the reference is not what was
-    /// said. Costs here are negative log probabilities, so smaller is better: a
-    /// correct transcript measured 0.11 to 0.35 nats per frame, and an
-    /// unrelated one 1.78. It is *not* usable for choosing the skip cost, or any
-    /// other search setting, since giving up more of the reference always
-    /// improves it.
+    /// Scores are negative log probabilities, so smaller is better. Do not use
+    /// this value to choose skip costs: allowing more skips can only reduce the
+    /// acoustic portion of the score.
     pub fn mean_acoustic_cost<A>(&self, chain: &AlignChain, dense: &DenseFst<'_, A>) -> f32
     where
         A: Arc,
@@ -704,10 +630,8 @@ where
         self.dense.frame(frame)
     }
 
-    /// The four, in the order that is the tie-break: waiting beats sounding,
-    /// standing still beats advancing, and keeping a phone beats giving it up.
-    /// Only a strict improvement moves off the incumbent, which makes a skip
-    /// cost a threshold rather than a suggestion.
+    // Order defines the tie-break: waiting beats sounding, staying beats
+    // advancing, and keeping a phone beats skipping it.
     #[inline(always)]
     fn steps_into(&self, frame: &[f32], position: usize) -> [Step; 4] {
         let blank = Step::new(0, frame[self.chain.blank as usize]);
@@ -728,13 +652,9 @@ impl<A: Arc> ReversibleTrellis<4> for ChainTrellis<'_, A>
 where
     A::Weight: FromScore,
 {
-    /// Written out rather than left to
-    /// [`derive_steps_out_of`](crate::trellis::derive_steps_out_of), which asks
-    /// what enters each cell within reach and reads the answer off that.
-    /// Measured at 5.32 s against 5.63 s for a forward-backward over ten minutes
-    /// of audio, so the 6 % is worth having. The price is that the two readings
-    /// can now disagree, and
-    /// [`axioms::check`](crate::trellis::axioms::check) is what settles that.
+    // SICADA-OPT: Spell out the reverse transitions so the backward pass does
+    // not query `steps_into` for every possible advance. The matching axiom
+    // test verifies that this agrees with the forward definition.
     #[inline(always)]
     fn steps_out_of(&self, frame: &[f32], position: usize) -> [Step; 4] {
         let blank = Step::new(0, frame[self.chain.blank as usize]);
@@ -755,10 +675,7 @@ where
     }
 }
 
-/// The column a transition reads, given the cell it lands in.
-///
-/// A frame either sounds the phone of the position it ends at or says nothing,
-/// so this needs the target rather than the source.
+// The column a transition reads is determined by its destination cell.
 #[inline(always)]
 pub(crate) fn column_read(chain: &AlignChain, code: u8, position: usize) -> u32 {
     if SOUNDS[code as usize] {
@@ -814,10 +731,10 @@ mod tests {
     use crate::trellis::axioms;
     use crate::viterbi::viterbi_decode;
 
-    /// Blank plus three phones.
+    // Blank plus three phones.
     const SYMBOLS: usize = 4;
 
-    /// Scores that make one column nearly certain in each frame.
+    // Scores that make one column nearly certain in each frame.
     fn certain(columns: &[usize]) -> Vec<f32> {
         let mut scores = vec![10.0; columns.len() * SYMBOLS];
         for (frame, &column) in columns.iter().enumerate() {
@@ -826,12 +743,12 @@ mod tests {
         scores
     }
 
-    /// What the alignment says it cost, recomputed from the reference and the
-    /// matrix: the frames' acoustic scores plus the phones given up.
-    ///
-    /// A traceback that has drifted off the winning path still reports the
-    /// winning *cost*, so comparing against an oracle's cost alone would not
-    /// catch it. This does.
+    // What the alignment says it cost, recomputed from the reference and the
+    // matrix: the frames' acoustic scores plus the phones given up.
+    //
+    // A traceback that has drifted off the winning path still reports the
+    // winning *cost*, so comparing against an oracle's cost alone would not
+    // catch it. This does.
     fn recomputed_cost(
         alignment: &Alignment,
         chain: &AlignChain,
@@ -846,12 +763,12 @@ mod tests {
         acoustic + skipped
     }
 
-    /// The answer the aligner is supposed to agree with: build the same chain as
-    /// an ordinary FST and decode it with the general decoder.
-    ///
-    /// The two share no code: one walks a hash-map frontier over an FST's arcs,
-    /// the other a banded array of `f32`. An agreement between them is therefore
-    /// evidence about the recurrence rather than about a shared mistake.
+    // The answer the aligner is supposed to agree with: build the same chain as
+    // an ordinary FST and decode it with the general decoder.
+    //
+    // The two share no code: one walks a hash-map frontier over an FST's arcs,
+    // the other a banded array of `f32`. An agreement between them is therefore
+    // evidence about the recurrence rather than about a shared mistake.
     fn by_decoding(chain: &AlignChain, dense: &DenseFst<'_, StdArc>) -> Option<Alignment> {
         let fst: StdVectorFst = chain.to_fst(1).expect("a chain FST");
         let decoded =
@@ -879,8 +796,8 @@ mod tests {
         assert!(alignment.cost().abs() < 1e-6, "{}", alignment.cost());
     }
 
-    /// Word times out of a phone alignment, which is usually what a caller
-    /// wants from one.
+    // Word times out of a phone alignment, which is usually what a caller
+    // wants from one.
     #[test]
     fn a_group_of_phones_spans_its_first_sounding_frame_to_its_last() {
         // Two words of two phones. The second word's second phone has no
@@ -909,8 +826,8 @@ mod tests {
         assert!(format!("{err}").contains("groups of 3 phones"), "{err}");
     }
 
-    /// The convention the whole crate's timings rest on: a blank frame is
-    /// nobody's.
+    // The convention the whole crate's timings rest on: a blank frame is
+    // nobody's.
     #[test]
     fn a_blank_frame_belongs_to_no_phone() {
         // One phone, then eight frames of silence: the end of a line.
@@ -967,12 +884,12 @@ mod tests {
         assert!(format!("{err}").contains("the blank is column 7"), "{err}");
     }
 
-    /// The reason skipping exists: text that was never spoken.
-    ///
-    /// Note what a skip is actually weighed against. It consumes a frame like
-    /// every other transition, and that frame reads the blank, so giving up a
-    /// phone is worth it when `skip` is less than what sounding the phone costs
-    /// *over* falling silent, rather than less than what sounding it costs.
+    // The reason skipping exists: text that was never spoken.
+    //
+    // Note what a skip is actually weighed against. It consumes a frame like
+    // every other transition, and that frame reads the blank, so giving up a
+    // phone is worth it when `skip` is less than what sounding the phone costs
+    // *over* falling silent, rather than less than what sounding it costs.
     #[test]
     fn a_phone_with_no_evidence_is_given_up_only_when_that_is_cheaper() {
         // Two frames sure of phone 1, then two the model hears as silence. The
@@ -1015,8 +932,8 @@ mod tests {
         );
     }
 
-    /// The threshold has to be strict, or a skip cost set to exactly the
-    /// evidence against the phone would throw it away.
+    // The threshold has to be strict, or a skip cost set to exactly the
+    // evidence against the phone would throw it away.
     #[test]
     fn a_skip_that_only_ties_does_not_happen() {
         // Frame 1 hears silence; sounding phone 2 there costs 4 more.
@@ -1085,7 +1002,7 @@ mod tests {
         );
     }
 
-    /// A small xorshift, so the random cases below are the same every run.
+    // A small xorshift, so the random cases below are the same every run.
     struct Rng(u64);
 
     impl Rng {
@@ -1100,17 +1017,17 @@ mod tests {
             (self.next() % n as u64) as usize
         }
 
-        /// A cost on a fine enough grid that two paths rarely tie, so the two
-        /// searches' tie-breaking rarely has to agree for the alignments to.
+        // A cost on a fine enough grid that two paths rarely tie, so the two
+        // searches' tie-breaking rarely has to agree for the alignments to.
         fn cost(&mut self) -> f32 {
             self.below(1 << 20) as f32 / 4096.0
         }
     }
 
-    /// Every alignment of `num_frames` frames onto `chain`, scored directly.
-    ///
-    /// Exponential, so only for the smallest cases, but it shares nothing at all
-    /// with the aligner, not even the shape of the recurrence.
+    // Every alignment of `num_frames` frames onto `chain`, scored directly.
+    //
+    // Exponential, so only for the smallest cases, but it shares nothing at all
+    // with the aligner, not even the shape of the recurrence.
     fn by_brute_force(
         chain: &AlignChain,
         dense: &DenseFst<'_, StdArc>,
@@ -1162,7 +1079,7 @@ mod tests {
         best
     }
 
-    /// Against every alignment there is, on cases small enough to enumerate.
+    // Against every alignment there is, on cases small enough to enumerate.
     #[test]
     fn it_agrees_with_enumerating_every_alignment() {
         let mut rng = Rng(0x1234_5678_9ABC_DEF1);
@@ -1216,9 +1133,9 @@ mod tests {
         assert!(compared > 150, "only {compared} rounds had an alignment");
     }
 
-    /// Against the same chain decoded as an ordinary FST, at sizes brute force
-    /// cannot reach, which is where the band and the packed traceback start to
-    /// matter.
+    // Against the same chain decoded as an ordinary FST, at sizes brute force
+    // cannot reach, which is where the band and the packed traceback start to
+    // matter.
     #[test]
     fn it_agrees_with_decoding_the_chain_as_an_fst() {
         let mut rng = Rng(0xFEED_FACE_1234_5678);
@@ -1271,8 +1188,8 @@ mod tests {
         assert!(compared > 150, "only {compared} rounds had an alignment");
     }
 
-    /// The chain is an FST like any other, so the lattice decoder gives
-    /// alternative alignments the exact aligner does not.
+    // The chain is an FST like any other, so the lattice decoder gives
+    // alternative alignments the exact aligner does not.
     #[test]
     fn the_chain_decodes_to_alternative_alignments() {
         // Two frames sure of phone 1, and one in between that is torn between
@@ -1346,9 +1263,9 @@ mod tests {
         assert!(AlignChain::new(vec![1]).to_fst::<StdArc>(0).is_err());
     }
 
-    /// The contract the solvers rely on, run as the checker every trellis is
-    /// told to run, including the requirement that the chain's hand-written
-    /// backward reading is the one its forward reading implies.
+    // The contract the solvers rely on, run as the checker every trellis is
+    // told to run, including the requirement that the chain's hand-written
+    // backward reading is the one its forward reading implies.
     #[test]
     fn the_chain_obeys_the_trellis_contract() {
         let chain = AlignChain::new(vec![1, 2, 1])
@@ -1365,9 +1282,9 @@ mod tests {
         axioms::check(&AlignChain::new(vec![]).against(&dense).unwrap());
     }
 
-    /// The band is an exact reachability argument, so its edges have to be
-    /// right at both ends: a reference exactly as long as the audio leaves no
-    /// slack at all.
+    // The band is an exact reachability argument, so its edges have to be
+    // right at both ends: a reference exactly as long as the audio leaves no
+    // slack at all.
     #[test]
     fn a_reference_as_long_as_the_audio_has_one_alignment() {
         let scores = certain(&[1, 2, 3]);

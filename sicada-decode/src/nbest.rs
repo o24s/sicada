@@ -38,7 +38,7 @@ impl<L: ArcLabel> Hypothesis<L> {
         self.weight.alignment()
     }
 
-    /// The one number this hypothesis comes down to.
+    /// The combined graph and acoustic cost.
     #[inline]
     pub fn cost(&self) -> f32 {
         self.weight.weight().total()
@@ -169,7 +169,7 @@ mod tests {
 
     type Compact = VectorFst<ArcTpl<CompactLatticeWeight<i32>, i32, i32>>;
 
-    /// Three symbols, each its own word, any sequence allowed.
+    // Three symbols, each its own word, any sequence allowed.
     fn graph() -> StdVectorFst {
         let mut fst: StdVectorFst = VectorFst::new();
         fst.add_state();
@@ -190,8 +190,8 @@ mod tests {
         determinize_lattice(&lattice, &DeterminizeLatticeOptions::default()).unwrap()
     }
 
-    /// Two frames, so nine word sequences, whose costs are the two frames'
-    /// scores added.
+    // Two frames, so nine word sequences, whose costs are the two frames'
+    // scores added.
     const SCORES: [f32; 6] = [
         0.0, 1.0, 2.0, //
         0.0, 0.5, 3.0,
@@ -220,8 +220,8 @@ mod tests {
         assert!((best[3].cost() - 1.5).abs() < 1e-6);
     }
 
-    /// The distinctness is the whole reason to determinize first, so it is
-    /// asserted rather than assumed.
+    // The distinctness is the whole reason to determinize first, so it is
+    // asserted rather than assumed.
     #[test]
     fn no_two_answers_say_the_same_thing() {
         let compact = compact_of(&SCORES, 2);
@@ -261,8 +261,8 @@ mod tests {
         }
     }
 
-    /// What keeping the halves apart is for: the same lattice, a different
-    /// balance between the models, and a different answer, with no decoding.
+    // What keeping the halves apart is for: the same lattice, a different
+    // balance between the models, and a different answer, with no decoding.
     #[test]
     fn rescaling_the_acoustic_half_changes_which_answer_wins() {
         // Word 10 is cheap acoustically and dear in the graph; word 20 is the

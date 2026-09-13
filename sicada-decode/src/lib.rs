@@ -1,14 +1,7 @@
-//! Decoding an acoustic model's output with sicada.
-//!
-//! This crate is the inference half of a pair: train on a GPU with k2, then run
-//! inference on a CPU here. That is the regime where a GPU decoder has the least
-//! to offer, since a single stream has no batch to fill and the time axis is
-//! serial either way, and correspondingly the regime where an FST library that
-//! is fast on a CPU earns its keep.
+//! CPU decoding and forced alignment for acoustic-model score matrices.
 //!
 //! It sits outside `sicada` proper because `sicada` is a port of OpenFst's
-//! library and none of this belongs to it; the pieces here come from the
-//! Kaldi/k2 side.
+//! library, while the algorithms here belong to the speech-decoding layer.
 //!
 //! - [`dense`] reads the acoustic model's `T × V` score matrix as an FST, so
 //!   that composing a decoding graph against it is an ordinary composition.
@@ -27,8 +20,9 @@
 //! - [`align`](mod@align) covers the other half of the same model's use. When the
 //!   transcript is already known the graph is a single chain, and the only
 //!   question is which frames each phone occupies. That case is small enough to
-//!   solve exactly, so it has no beam. [`occupancy`](mod@occupancy) walks the same chain in the
-//!   log semiring, for the soft answer that a single path cannot give.
+//!   solve exactly, so it has no beam. [`occupancy`](mod@occupancy) walks the
+//!   same chain in the log semiring, for the soft answer that a single path
+//!   cannot give.
 //! - [`trellis`] is the solver those two are built on, and the piece to use
 //!   when the chain is not the shape you want. Supply the transitions into a cell
 //!   (how many there are, what they cost, what they mean) and the band, the

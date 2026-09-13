@@ -22,18 +22,14 @@
 //! - **diagnosis.** [`Occupancy::skip_posteriors`] gives, per phone, how much
 //!   of the probability mass gave it up. That is the instrument the tropical
 //!   answer cannot supply: a skip in [`Alignment::skipped`] is a decision, and
-//!   a decision does not say whether it was close. Silent skips are the
-//!   failure mode this whole module exists to catch, so the soft count is
-//!   worth its cost.
+//!   a decision does not report its confidence.
 //!
 //! # What it costs
 //!
 //! The backward pass needs the forward scores, so where
 //! [`align`](crate::align::align) keeps two rows and a packed traceback, this
-//! keeps the whole `(T + 1) × (N + 1)` plane of them: 651 MB for a ten-minute
-//! utterance against a 5 385-phone reference. That still fits, but it is 16
-//! times the aligner, so [`occupancy`] is the second call to make and not the
-//! first.
+//! keeps the whole `(T + 1) × (N + 1)` score plane. Its memory use is therefore
+//! proportional to the product of the frame and reference lengths.
 //!
 //! [`Alignment::skipped`]: crate::align::Alignment::skipped
 
@@ -85,10 +81,8 @@ impl Occupancy {
     /// alignment of it at once.
     ///
     /// Always at most [`Alignment::cost`](crate::align::Alignment::cost), which
-    /// is the single best alignment's, and equal to it only when there is just
-    /// one. The gap between them is how undecided the alignment is, and it is
-    /// the honest number to compare two references with, since the best path's
-    /// cost can be beaten by a reference that merely has one good alignment.
+    /// is the cost of the single best alignment. The gap measures probability
+    /// mass carried by alternative alignments.
     #[inline(always)]
     pub fn cost(&self) -> f32 {
         self.cost
@@ -128,10 +122,9 @@ impl Occupancy {
     /// Per position, how much of the probability took the skip transition into
     /// it.
     ///
-    /// Zero everywhere unless the chain allows skipping. It makes a skip
-    /// auditable: [`Alignment::skipped`](crate::align::Alignment::skipped)
-    /// reports the decision, and this reports how close it was. A phone at 0.51
-    /// was a coin toss, and one at 0.999 really is not in the audio.
+    /// Zero everywhere unless the chain allows skipping.
+    /// [`Alignment::skipped`](crate::align::Alignment::skipped) reports the
+    /// best-path decision; this value reports its posterior confidence.
     ///
     /// It is an upper bound on the posterior that a phone got no frames at all,
     /// and not quite the same thing. Skipping into `s_i` and then *holding*
@@ -215,11 +208,11 @@ mod tests {
 
     use crate::align::{Alignment, align};
 
-    /// Blank plus three phones.
+    // Blank plus three phones.
     const SYMBOLS: usize = 4;
 
-    /// One frame of a path: the column it read, the position it sounded, and
-    /// the position it gave up.
+    // One frame of a path: the column it read, the position it sounded, and
+    // the position it gave up.
     #[derive(Clone, Copy)]
     struct Step {
         column: usize,
@@ -227,12 +220,12 @@ mod tests {
         skipped: Option<usize>,
     }
 
-    /// Every complete alignment, weighed by its probability.
-    ///
-    /// The definition of a forward-backward, written out: enumerate the paths,
-    /// give each `e^-cost`, and normalise. Exponential, so only for the smallest
-    /// cases, but it shares nothing with the recurrences under test, not even
-    /// the idea of a recurrence.
+    // Every complete alignment, weighed by its probability.
+    //
+    // The definition of a forward-backward, written out: enumerate the paths,
+    // give each `e^-cost`, and normalise. Exponential, so only for the smallest
+    // cases, but it shares nothing with the recurrences under test, not even
+    // the idea of a recurrence.
     #[derive(Debug)]
     struct Enumerated {
         cost: f32,
@@ -355,7 +348,7 @@ mod tests {
         })
     }
 
-    /// A small xorshift, so the random cases below are the same every run.
+    // A small xorshift, so the random cases below are the same every run.
     struct Rng(u64);
 
     impl Rng {
@@ -370,8 +363,8 @@ mod tests {
             (self.next() % n as u64) as usize
         }
 
-        /// Costs in a range where several alignments have real mass, so the
-        /// posteriors under test are not all zero and one.
+        // Costs in a range where several alignments have real mass, so the
+        // posteriors under test are not all zero and one.
         fn cost(&mut self) -> f32 {
             self.below(1 << 14) as f32 / 4096.0
         }
@@ -478,8 +471,8 @@ mod tests {
         }
     }
 
-    /// The two semirings answer different questions, and the difference is the
-    /// point of having both.
+    // The two semirings answer different questions, and the difference is the
+    // point of having both.
     #[test]
     fn the_total_is_over_every_alignment_not_the_best_one() {
         // Three frames, one phone: the phone can sound in any non-empty run, so
@@ -542,7 +535,7 @@ mod tests {
         assert!(measured.skip_posteriors().iter().all(|&mass| mass == 0.0));
     }
 
-    /// The instrument the tropical answer cannot supply: how close the skip was.
+    // The instrument the tropical answer cannot supply: how close the skip was.
     #[test]
     fn a_skip_that_is_a_coin_toss_shows_as_one() {
         // Sounding phone 2 in frame 1 costs exactly what giving it up costs.
@@ -623,8 +616,8 @@ mod tests {
         }
     }
 
-    /// The alignment and the occupancy have to be talking about the same
-    /// frames, since a caller reads them side by side.
+    // The alignment and the occupancy have to be talking about the same
+    // frames, since a caller reads them side by side.
     #[test]
     fn it_lines_up_with_the_alignment_frame_for_frame() {
         let mut rng = Rng(0x5151_2727_3939_4B4B);

@@ -10,9 +10,8 @@
 //!
 //! Nothing is materialised. [`DenseFst`] borrows the matrix and computes each
 //! arc as it is asked for, so composing against it costs no copy of the
-//! acoustic scores. This is k2's `DenseFsaVec` without the batch dimension:
-//! there is one utterance here, because the point of this crate is decoding one
-//! stream on a CPU rather than many on a GPU.
+//! acoustic scores. It corresponds to a single, unbatched item in k2's
+//! `DenseFsaVec`.
 
 use std::marker::PhantomData;
 
@@ -415,15 +414,15 @@ mod tests {
     use sicada::properties::K_FST_PROPERTIES;
     use sicada::weights::float_weight::TropicalWeight;
 
-    /// Two frames over three symbols.
+    // Two frames over three symbols.
     const SCORES: [f32; 6] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
 
     fn dense() -> DenseFst<'static, StdArc> {
         DenseFst::new(&SCORES, 2, 3).expect("a dense FST")
     }
 
-    /// The same thing built by hand, to compare a computed FST against a
-    /// stored one.
+    // The same thing built by hand, to compare a computed FST against a
+    // stored one.
     fn materialised() -> StdVectorFst {
         let mut fst = VectorFst::new();
         for _ in 0..3 {
@@ -470,8 +469,8 @@ mod tests {
         }
     }
 
-    /// The properties are claims other algorithms act on, so they are compared
-    /// against what sicada computes for the same FST stored.
+    // The properties are claims other algorithms act on, so they are compared
+    // against what sicada computes for the same FST stored.
     #[test]
     fn its_properties_are_the_ones_the_same_fst_stored_has() {
         let dense = dense();

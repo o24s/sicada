@@ -365,7 +365,7 @@ mod tests {
 
     use crate::viterbi::viterbi_decode;
 
-    /// A small xorshift, so the random cases are the same every run.
+    // A small xorshift, so the random cases are the same every run.
     struct Rng(u64);
 
     impl Rng {
@@ -416,7 +416,7 @@ mod tests {
         graph
     }
 
-    /// `dense ∘ graph`, connected: what an exhaustive lattice should be.
+    // `dense ∘ graph`, connected: what an exhaustive lattice should be.
     fn composition(graph: &StdVectorFst, dense: &DenseFst<'_, StdArc>) -> StdVectorFst {
         let mut sorted = graph.clone();
         arc_sort(&mut sorted, &ILabelCompare);
@@ -425,7 +425,7 @@ mod tests {
         composed
     }
 
-    /// The lattice's own best path, read out the same way the oracle's is.
+    // The lattice's own best path, read out the same way the oracle's is.
     fn best_of(lattice: &Lattice<StdArc>) -> (Vec<i32>, f32) {
         let mut best: Lattice<StdArc> = VectorFst::new();
         shortest_path(lattice, &mut best, &ShortestPathOptions::default()).expect("a best path");
@@ -470,9 +470,9 @@ mod tests {
         assert!((total - expected.weight.0).abs() < 1e-5);
     }
 
-    /// The two halves are the point of the whole weight, so they are checked
-    /// rather than only their sum: the acoustic half of the best path has to be
-    /// the frame scores it actually used.
+    // The two halves are the point of the whole weight, so they are checked
+    // rather than only their sum: the acoustic half of the best path has to be
+    // the frame scores it actually used.
     #[test]
     fn the_two_costs_stay_apart() {
         let scores = [
@@ -504,10 +504,10 @@ mod tests {
         assert!((weight.total_scaled(0.5) - (0.5 + 0.75)).abs() < 1e-6);
     }
 
-    /// With no beam anywhere, the lattice *is* `graph ∘ dense`: the same states
-    /// and the same arcs, because every pair survives and every arc between two
-    /// survivors is kept. That equality is the strongest statement available
-    /// about the construction, so it is the one the random cases check.
+    // With no beam anywhere, the lattice *is* `graph ∘ dense`: the same states
+    // and the same arcs, because every pair survives and every arc between two
+    // survivors is kept. That equality is the strongest statement available
+    // about the construction, so it is the one the random cases check.
     #[test]
     fn an_unpruned_lattice_is_the_composition() {
         let symbols = 4;
@@ -565,13 +565,13 @@ mod tests {
         );
     }
 
-    /// The lattice beam drops paths, so the lattice shrinks, but never so far
-    /// that the best path gets worse.
-    ///
-    /// The *cost* is what is asserted, not the labels. Two paths can tie
-    /// exactly, and then which one `shortest_path` returns is not determined;
-    /// removing one of them legitimately changes the answer without changing
-    /// how good it is. Round 131 of these seeds is such a case.
+    // The lattice beam drops paths, so the lattice shrinks, but never so far
+    // that the best path gets worse.
+    //
+    // The *cost* is what is asserted, not the labels. Two paths can tie
+    // exactly, and then which one `shortest_path` returns is not determined;
+    // removing one of them legitimately changes the answer without changing
+    // how good it is. Round 131 of these seeds is such a case.
     #[test]
     fn pruning_keeps_the_best_path() {
         let symbols = 4;
@@ -641,8 +641,8 @@ mod tests {
         );
     }
 
-    /// The alignment has to survive: the input labels say which acoustic column
-    /// each frame used, which a second pass needs in order to rescore it.
+    // The alignment has to survive: the input labels say which acoustic column
+    // each frame used, which a second pass needs in order to rescore it.
     #[test]
     fn the_input_labels_are_still_the_acoustic_columns() {
         let scores = [5.0, 1.0, 9.0];

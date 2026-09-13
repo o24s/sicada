@@ -145,14 +145,12 @@ mod tests {
     use crate::nbest::n_best;
     use crate::viterbi::viterbi_decode;
 
-    /// Blank plus three symbols.
     const SYMBOLS: usize = 4;
 
     fn topo() -> StdVectorFst {
         ctc_topo(SYMBOLS, 1).expect("a topology")
     }
 
-    /// Scores that make one column certain in every frame.
     fn certain(columns: &[usize]) -> Vec<f32> {
         let mut scores = vec![10.0; columns.len() * SYMBOLS];
         for (frame, &column) in columns.iter().enumerate() {
@@ -161,7 +159,6 @@ mod tests {
         scores
     }
 
-    /// A decoded answer's labels back as the model's columns.
     fn columns_of(labels: &[i32]) -> Vec<usize> {
         labels.iter().map(|label| (label - 1) as usize).collect()
     }
@@ -178,9 +175,6 @@ mod tests {
         }
     }
 
-    /// The rule the topology exists to encode, checked against the rule written
-    /// out directly, over every alignment of up to five frames, so there is
-    /// nothing left to have missed.
     #[test]
     fn it_collapses_exactly_as_the_rule_says() {
         let graph = topo();
@@ -218,8 +212,6 @@ mod tests {
         }
     }
 
-    /// The case that distinguishes CTC from plain collapsing: a blank between
-    /// two of the same symbol keeps them apart.
     #[test]
     fn a_blank_is_what_lets_a_symbol_repeat() {
         let graph = topo();
@@ -239,8 +231,6 @@ mod tests {
         assert_eq!(columns_of(&decoded.labels), vec![1, 1], "two of them");
     }
 
-    /// End to end: acoustic scores in, a lattice out, the alignments collapsed,
-    /// and the answers read back in order.
     #[test]
     fn the_whole_pipeline_agrees_with_the_rule() {
         let graph = topo();

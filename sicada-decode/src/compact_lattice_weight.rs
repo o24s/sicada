@@ -418,9 +418,9 @@ mod tests {
         axioms::check_divide(&samples());
     }
 
-    /// The claim it deliberately does *not* make. ⊗ concatenates, so the two
-    /// orders differ, and an algorithm that assumed otherwise would reorder a
-    /// word's frames.
+    // The claim it deliberately does *not* make. ⊗ concatenates, so the two
+    // orders differ, and an algorithm that assumed otherwise would reorder a
+    // word's frames.
     #[test]
     fn it_does_not_claim_to_commute() {
         assert_eq!(W::properties() & sicada::weight::COMMUTATIVE, 0);
@@ -430,8 +430,7 @@ mod tests {
         assert_eq!(a.times(&b).alignment(), &[1, 2]);
     }
 
-    /// The whole point: two alignments of the same word, and the better one
-    /// wins outright rather than being merged with the loser.
+    // Alternative alignments select the cheaper complete weight.
     #[test]
     fn plus_keeps_the_better_alignment_whole() {
         let cheap = aligned(1.0, 1.0, &[5, 5, 6]);
@@ -441,8 +440,8 @@ mod tests {
         assert_eq!(cheap.plus(&dear).alignment(), &[5, 5, 6]);
     }
 
-    /// A tie has to resolve the same way whichever order the two arrive in, or
-    /// determinization would not converge.
+    // A tie has to resolve the same way whichever order the two arrive in, or
+    // determinization would not converge.
     #[test]
     fn a_tie_prefers_the_shorter_alignment() {
         let short = aligned(1.0, 1.0, &[5]);
@@ -456,8 +455,8 @@ mod tests {
         assert_eq!(high.plus(&low), low);
     }
 
-    /// A second zero would be absorbing under ⊗ and losing under ⊕ just as the
-    /// real one is, but unequal to it, so `== zero()` would start missing it.
+    // A second zero would be absorbing under ⊗ and losing under ⊕ just as the
+    // real one is, but unequal to it, so `== zero()` would start missing it.
     #[test]
     fn the_zero_is_unique() {
         assert_eq!(
@@ -515,8 +514,8 @@ mod tests {
         assert!("1,2".parse::<W>().is_err());
     }
 
-    /// The name goes into an FST file header, and it is Kaldi's, sizes and
-    /// all: `compact` + the cost pair's name + how wide one label is.
+    // The name goes into an FST file header, and it is Kaldi's, sizes and
+    // all: `compact` + the cost pair's name + how wide one label is.
     #[test]
     fn its_type_name_is_kaldis() {
         assert_eq!(W::type_name().as_str(), "compactlattice44");
@@ -526,9 +525,9 @@ mod tests {
         );
     }
 
-    /// A lattice written here should be one Kaldi reads, which means the bytes
-    /// are its bytes: the two costs, then the alignment's length, then the
-    /// labels.
+    // A lattice written here should be one Kaldi reads, which means the bytes
+    // are its bytes: the two costs, then the alignment's length, then the
+    // labels.
     #[test]
     fn it_writes_the_bytes_upstream_writes() {
         let mut bytes = Vec::new();

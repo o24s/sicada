@@ -6,7 +6,7 @@
 //! can be walked one frame at a time keeping only the graph states alive at
 //! that frame. That is the standard decoder shape (Kaldi's `SimpleDecoder` and
 //! `FasterDecoder`, k2's `intersect_dense_pruned`), and it keeps decoding linear
-//! in `T` rather than in the size of a composition nobody wants to store.
+//! in `T` without materialising the composition.
 //!
 //! Two kinds of arc leave a graph state:
 //!
@@ -285,12 +285,12 @@ mod tests {
     use sicada::weight::Weight;
     use sicada::weights::float_weight::TropicalWeight;
 
-    /// The answer the decoder is supposed to agree with: build the whole
-    /// composition and take its shortest path.
-    ///
-    /// This is exactly the work the decoder exists to avoid, which is why it
-    /// makes a good oracle: it shares no code with the thing under test beyond
-    /// the FST types themselves.
+    // The answer the decoder is supposed to agree with: build the whole
+    // composition and take its shortest path.
+    //
+    // This is exactly the work the decoder exists to avoid, which is why it
+    // makes a good oracle: it shares no code with the thing under test beyond
+    // the FST types themselves.
     fn by_composition(
         graph: &StdVectorFst,
         dense: &DenseFst<'_, StdArc>,
@@ -313,8 +313,8 @@ mod tests {
         Some((labels.into_iter().filter(|&l| l != 0).collect(), weight.0))
     }
 
-    /// A graph over 3 symbols (columns 0..2, labels 1..3) that accepts any
-    /// sequence, mapping label 1 to output 10, 2 to 20, 3 to 30.
+    // A graph over 3 symbols (columns 0..2, labels 1..3) that accepts any
+    // sequence, mapping label 1 to output 10, 2 to 20, 3 to 30.
     fn free_graph() -> StdVectorFst {
         let mut fst = VectorFst::new();
         fst.add_state();
@@ -364,8 +364,8 @@ mod tests {
         assert!((decoded.weight.0 - weight).abs() < 1e-5);
     }
 
-    /// The same agreement over graphs that constrain what may follow what, and
-    /// that carry their own costs.
+    // The same agreement over graphs that constrain what may follow what, and
+    // that carry their own costs.
     #[test]
     fn it_agrees_on_a_graph_that_forbids_repeats() {
         // 3 states: after emitting symbol s you may not emit s again.
@@ -408,9 +408,9 @@ mod tests {
         assert!((decoded.weight.0 - weight).abs() < 1e-5);
     }
 
-    /// Epsilon arcs consume no frame, so a path may take several of them
-    /// between two frames. The composition oracle handles them by construction,
-    /// which is why it is worth comparing against.
+    // Epsilon arcs consume no frame, so a path may take several of them
+    // between two frames. The composition oracle handles them by construction,
+    // which is why it is worth comparing against.
     #[test]
     fn it_agrees_when_the_graph_has_epsilon_arcs() {
         let mut graph: StdVectorFst = VectorFst::new();
@@ -443,7 +443,7 @@ mod tests {
         assert!((decoded.weight.0 - weight).abs() < 1e-5);
     }
 
-    /// A small xorshift, so the random cases below are the same every run.
+    // A small xorshift, so the random cases below are the same every run.
     struct Rng(u64);
 
     impl Rng {
@@ -458,18 +458,14 @@ mod tests {
             (self.next() % n as u64) as usize
         }
 
-        /// A non-negative cost with enough distinct values that two different
-        /// paths rarely land on the same total.
+        // A non-negative cost with enough distinct values that two different
+        // paths rarely land on the same total.
         fn cost(&mut self) -> f32 {
             self.below(4096) as f32 / 64.0
         }
     }
 
-    /// The agreement, over graphs nobody chose.
-    ///
-    /// The deterministic cases above each aim at one thing; this one exists to
-    /// find what none of them thought of, which for a beam search is nearly
-    /// always the interaction between epsilon closure and pruning.
+    // Random graphs cover interactions between epsilon closure and pruning.
     #[test]
     fn it_agrees_with_the_composition_on_random_graphs() {
         let symbols = 4;
