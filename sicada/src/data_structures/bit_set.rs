@@ -331,11 +331,14 @@ impl BitRelations<GrowableBitSet> for GrowableBitSet {
             |a, b| a & b,
         );
 
-        if self.bit_set.words.len() > min_words {
+        let cleared = self.bit_set.words[min_words..]
+            .iter()
+            .any(|&word| word != 0);
+        if cleared {
             self.bit_set.words[min_words..].fill(0);
         }
 
-        changed || (self.bit_set.words.len() > min_words)
+        changed || cleared
     }
 }
 
@@ -415,5 +418,21 @@ mod tests {
         bs.union(&bs2); // Auto-resizes self to match bs2
         assert!(bs.contains(2048));
         assert_eq!(bs.count(), 3);
+    }
+
+    #[test]
+    fn intersect_reports_only_an_actual_change_across_different_domains() {
+        let mut large = GrowableBitSet::with_capacity(129);
+        let small = GrowableBitSet::with_capacity(1);
+
+        assert!(!large.intersect(&small), "two empty sets do not change");
+
+        large.insert(128);
+        assert!(large.intersect(&small), "the out-of-domain bit is cleared");
+        assert!(large.is_empty());
+        assert!(
+            !large.intersect(&small),
+            "repeating the intersection does not report a change"
+        );
     }
 }

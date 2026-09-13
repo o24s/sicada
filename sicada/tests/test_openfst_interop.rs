@@ -28,14 +28,18 @@ use std::io::Cursor;
 
 use sicada::arc::{Arc as _, StdArc};
 use sicada::fst::{ExpandedFst, Fst, FstReadOptions, FstWriteOptions};
+#[cfg(feature = "fst-types")]
 use sicada::fst_type::FstType;
+#[cfg(feature = "fst-types")]
 use sicada::fsts::any_fst::AnyFst;
 use sicada::fsts::compact_fst::{
     AcceptorCompactor, ArcCompactor, CompactFst, CompactStringFst, StringCompactor, Unsigned,
     UnweightedAcceptorCompactor, UnweightedCompactor, WeightedStringCompactor,
 };
 use sicada::fsts::const_fst::ConstFst;
+#[cfg(feature = "fst-types")]
 use sicada::fsts::edit_fst::EditFst;
+#[cfg(feature = "fst-types")]
 use sicada::fsts::matcher_fst::MatcherFst;
 use sicada::fsts::vector_fst::VectorFst;
 use sicada::weight::Weight;
@@ -286,6 +290,7 @@ fn a_compact_file_does_not_read_as_the_wrong_compactor() {
 /// reader has to apply the second to the first: state 1 is final only because
 /// an edit made it so, and state 2's second arc is only in the edits.
 #[test]
+#[cfg(feature = "fst-types")]
 fn an_edit_fst_written_by_openfst_reads_here() {
     let bytes = fixture("openfst-edit.fst");
     let fst = EditFst::<StdArc, AnyFst<StdArc>>::read(
@@ -310,6 +315,7 @@ fn an_edit_fst_written_by_openfst_reads_here() {
 /// and arcs are is the wrapped FST's answer, so reading one back has to give
 /// the base FST unchanged, sorted the way the index was built over.
 #[test]
+#[cfg(feature = "fst-types")]
 fn a_matcher_fst_written_by_openfst_reads_here() {
     let bytes = fixture("openfst-matcher-arc.fst");
     let fst = MatcherFst::<StdArc>::read(
@@ -351,6 +357,7 @@ fn a_matcher_fst_written_by_openfst_reads_here() {
 /// `(start, num_states, num_arcs)` from an FST header, and where the header
 /// ends. Only the flagless case is handled, which is what a matcher FST writes:
 /// its symbol tables belong to the FST nested inside it.
+#[cfg(feature = "fst-types")]
 fn outer_header(bytes: &[u8]) -> ((i64, i64, i64), usize) {
     let mut at = 0usize;
     let i32_at = |at: &mut usize| {
@@ -387,6 +394,7 @@ fn outer_header(bytes: &[u8]) -> ((i64, i64, i64), usize) {
 /// Reading it as though the numbers were labels would give a matcher that
 /// quietly answers "no" to every real label.
 #[test]
+#[cfg(feature = "fst-types")]
 fn a_label_lookahead_file_without_its_label_map_is_refused() {
     for (name, fst_type) in [
         ("openfst-matcher-ilabel.fst", FstType::ILABEL_LOOKAHEAD),
@@ -410,6 +418,7 @@ fn a_label_lookahead_file_without_its_label_map_is_refused() {
 /// The symbol tables ride in the header of every format that has one, so a
 /// reader that gets the body right can still lose them.
 #[test]
+#[cfg(feature = "fst-types")]
 fn the_symbol_tables_survive_the_formats_that_carry_them() {
     let bytes = fixture("openfst-edit.fst");
     let fst = EditFst::<StdArc, AnyFst<StdArc>>::read(

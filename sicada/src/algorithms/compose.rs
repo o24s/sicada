@@ -329,7 +329,7 @@ where
 /// the composition is large or when the same `fst1` is composed against many
 /// second arguments, and not otherwise. Saving the index beside the FST, so
 /// that the pass happens once ever, is what
-/// [`MatcherFst`](crate::fsts::matcher_fst::MatcherFst) is for.
+/// `MatcherFst` is for.
 ///
 /// # `fst2` must have no input epsilons
 ///

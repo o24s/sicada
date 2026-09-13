@@ -6,7 +6,10 @@ use std::io::{BufWriter, Write as _};
 
 use sicada::arc::{Arc, StdArc};
 use sicada::cache::CacheOptions;
-use sicada::fst::{ExpandedFst, Fst, FstReadOptions, FstWriteOptions, MutableFst};
+#[cfg(feature = "fst-types")]
+use sicada::fst::FstReadOptions;
+use sicada::fst::{ExpandedFst, Fst, FstWriteOptions, MutableFst};
+#[cfg(feature = "fst-types")]
 use sicada::fsts::any_fst::AnyFst;
 use sicada::fsts::compact_fst::CompactStringFst;
 use sicada::fsts::vector_fst::StdVectorFst;
@@ -48,9 +51,12 @@ fn a_compact_string_fst_round_trips_through_a_file() {
         writer.flush().expect("flushed");
     }
 
-    let any = AnyFst::<StdArc>::read_from_file(path, &FstReadOptions::default())
-        .expect("an FST of some type");
-    assert!(any.fst_type().starts_with("compact"));
-    assert_eq!(any.num_states(), 3);
-    assert_eq!(any.arcs(s0).next().expect("the first arc").ilabel(), 1);
+    #[cfg(feature = "fst-types")]
+    {
+        let any = AnyFst::<StdArc>::read_from_file(path, &FstReadOptions::default())
+            .expect("an FST of some type");
+        assert!(any.fst_type().starts_with("compact"));
+        assert_eq!(any.num_states(), 3);
+        assert_eq!(any.arcs(s0).next().expect("the first arc").ilabel(), 1);
+    }
 }

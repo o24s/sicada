@@ -6,6 +6,7 @@
 //! of edits, that is the difference between copying everything and copying
 //! almost nothing.
 
+#[cfg(feature = "fst-types")]
 use std::io::{Read, Seek, Write};
 
 use rustc_hash::FxHashMap;
@@ -13,11 +14,12 @@ use rustc_hash::FxHashMap;
 use crate::AtomicRc;
 use crate::algorithms::test_properties::cached_properties;
 use crate::arc::{Arc, ArcStateId};
+#[cfg(feature = "fst-types")]
 use crate::error::OpenFstError;
-use crate::fst::{
-    ExpandedFst, Fst, FstReadOptions, FstWriteOptions, MutableFst, PropertyCache, read_fst_header,
-    write_fst_header,
-};
+use crate::fst::{ExpandedFst, Fst, MutableFst, PropertyCache};
+#[cfg(feature = "fst-types")]
+use crate::fst::{FstReadOptions, FstWriteOptions, read_fst_header, write_fst_header};
+#[cfg(feature = "fst-types")]
 use crate::fst_header::FstHeader;
 use crate::fst_type::FstType;
 #[cfg(feature = "fst-types")]
@@ -25,7 +27,9 @@ use crate::fsts::any_fst::AnyFst;
 use crate::fsts::vector_fst::VectorFst;
 use crate::properties::*;
 use crate::symbol_table::SymbolTable;
+#[cfg(feature = "fst-types")]
 use crate::utils::io::{FstScalar, read_scalar, write_scalar};
+#[cfg(feature = "fst-types")]
 use crate::weight::WeightIo;
 
 /// An FST that records edits to another rather than changing it.
@@ -305,8 +309,10 @@ impl<A: Arc, F: ExpandedFst<A>> EditFst<A, F> {
 }
 
 /// The file version this format writes, matching upstream's `kFileVersion`.
+#[cfg(feature = "fst-types")]
 const FILE_VERSION: i32 = 2;
 /// The oldest version that can be read, matching upstream's `kMinFileVersion`.
+#[cfg(feature = "fst-types")]
 const MIN_FILE_VERSION: i32 = 2;
 
 #[cfg(feature = "fst-types")]

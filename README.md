@@ -1,54 +1,54 @@
 # sicada
 
-Weighted finite-state transducers in Rust. The repository holds two crates:
+Weighted finite-state transducers in Rust. This workspace contains two crates:
 
-- **`sicada`** implements OpenFst's `openfst/lib` from scratch, and reads and
-  writes the same files.
-- **`sicada-decode`** sits on top of it: a frame-synchronous decoder, lattices
-  over Kaldi's semirings, CTC topologies and an exact forced aligner (no beam).
+- **`sicada`** is an independent implementation of OpenFst's `openfst/lib` and
+  is compatible with the OpenFst binary file format.
+- **`sicada-decode`** provides frame-synchronous speech decoding, lattices over
+  Kaldi's semirings, CTC topologies, and exact forced alignment without beam
+  pruning.
 
-Both APIs are unstable. The sections below are about `sicada`.
+Both crates are pre-1.0 and their APIs may change. The remainder of this README
+describes `sicada`.
 
 ## Differences from OpenFst
 
-- No FFI. The library links nothing and has no build script; only `sicada-bench`
-  links against the C++, to measure it.
-- The binary file format is the same, so FSTs written by OpenFst can be read here
-  and vice versa.
-- Algorithms are generic over an arc type rather than over a weight, and carry no
-  other type arguments. Most state the semiring properties they rely on as trait
-  bounds instead of taking any weight.
-- There is no dynamic type registry and no `dlopen` plugin mechanism. Reading an
-  FST whose type is only known from its file header dispatches over a closed
-  enum instead.
+- No FFI is used. The library has no build script and links no C++ code. Only
+  `sicada-bench` links OpenFst for comparative benchmarks.
+- FSTs can be exchanged with OpenFst through the compatible binary format.
+- Algorithms are generic over an arc type rather than a weight type. Required
+  semiring properties are expressed with trait bounds.
+- Runtime type discovery uses a closed enum instead of OpenFst's dynamic type
+  registry and `dlopen` plugin mechanism.
 
 ## Differences from rustfst
 
-- rustfst is also a port of OpenFst; the two are independent.
-- sicada uses generic associated types for its iterators, so `Fst` is not
+- rustfst and sicada are independent implementations of OpenFst semantics.
+- sicada uses generic associated types for iterators, so `Fst` is not
   object-safe and there is no `Box<dyn Fst>`.
-- Call sites need no type annotations: sicada takes its inputs by reference and
-  writes into a `&mut` output, so every type parameter appears in an argument.
-  rustfst returns the output and takes inputs through `Borrow`, so in 1.3.1
-  `compose(owned, &borrowed)` is `E0283` and wants all six spelled out
-  ([rustfst#235](https://github.com/garvys-org/rustfst/issues/235)). The cost is that calls do not nest into expressions.
+- sicada takes inputs by reference and writes to a mutable output argument, so
+  Rust can infer every type parameter. In rustfst 1.3.1,
+  `compose(owned, &borrowed)` produces `E0283` unless all six type parameters are
+  specified ([rustfst#235](https://github.com/garvys-org/rustfst/issues/235)).
+  The trade-off is that sicada operations cannot be nested as expressions.
 
 ## Benchmarks
 
-One run, all four implementations built together and measured alternately, best
-round of each. Ratios are the other implementation divided by sicada, so **above
-1.00x means sicada took less time**. Compared against OpenFst at
-`1.8.5-377-ge6bbae9`, rustfst 1.3.1 and arcweight 0.3.0, on x86_64 Linux with
-gcc 15.2 and rustc 1.97, at `-O3` and `release`.
+These results come from a single build in which all four implementations were
+linked into one executable and measured in alternating rounds. Each table shows
+the best round. Ratios divide the other implementation's time by sicada's, so a
+ratio above 1.00x means sicada was faster. The comparison used OpenFst
+`1.8.5-377-ge6bbae9`, rustfst 1.3.1, and arcweight 0.3.0 on x86_64 Linux with
+GCC 15.2 and rustc 1.97. C++ used `-O3`; Rust used the `release` profile.
 
-Every benchmark [asserts that the implementations produced the same
-answer](https://github.com/o24s/sicada/blob/main/sicada-bench/src/bin/ab.rs) before timing them, as states, arcs
-and the ⊕-sum over all paths.
+Before timing, each benchmark [checks the number of states and arcs and the
+semiring sum over all paths](https://github.com/o24s/sicada/blob/main/sicada-bench/src/bin/ab.rs).
 
 ### Data structures
 
-rustfst and arcweight do not expose these, so the comparison is against OpenFst
-only. The C++ side is upstream's own code extracted verbatim.
+rustfst and arcweight do not expose these data structures, so only OpenFst is
+included in this comparison. The C++ benchmark uses the relevant upstream
+implementations verbatim.
 
 | | sicada | OpenFst | OpenFst / sicada |
 | --- | ---: | ---: | ---: |
@@ -65,16 +65,14 @@ only. The C++ side is upstream's own code extracted verbatim.
 
 ### Algorithms
 
-Two rows are losses rather than ties. On the cyclic `shortest-distance`,
-arcweight is at 0.68x: sicada chooses its queue by decomposing the graph into
-strongly connected components, as OpenFst does and arcweight does not, and the
-acyclic rows are where that decomposition pays for itself. On
-`shortest-path/10000x4-acyclic`, rustfst is at 0.73x: sicada reads the acyclic
-property and takes a queue in topological order, and most of the time goes into
-the depth-first search that produces that order, where rustfst has a search of
-its own for shortest paths that does not go through the general distance
-algorithm. Rows within a few percent of 1.00x move between runs and are
-ties in either direction.
+Two rows show clear regressions rather than measurement noise. For cyclic
+`shortest-distance`, arcweight reaches 0.68x because sicada follows OpenFst and
+decomposes the graph into strongly connected components before selecting a
+queue. That setup cost is recovered on acyclic inputs. For
+`shortest-path/10000x4-acyclic`, rustfst reaches 0.73x because sicada first runs
+a depth-first search to obtain the topological order used by the general
+distance algorithm, while rustfst uses a dedicated shortest-path search. Ratios
+within a few percent of 1.00x vary between runs and should be treated as ties.
 
 | | sicada | OpenFst | rustfst | arcweight | best other / sicada | worst other / sicada |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -102,44 +100,47 @@ ties in either direction.
 | `compose/3000x4` | 2.44 ms | 3.45 ms | 5.37 ms | - ⁴ | 1.42x | 2.21x |
 | `compose/dense-3000x4` | 873.3 µs | 1.35 ms | 1.93 ms | 1.12 ms | 1.28x | 2.21x |
 
-Left out of a row because the result differed from the other three. The sum over
-all paths agrees everywhere, so these are structural differences: the semiring
-here is tropical, where ⊕ is `min`, so a duplicated path or a parallel arc is
-absorbed and never reaches the total. Over the log semiring the differences in
-1 and 4 would be differences in the answer. The numbers below are from
-[`diag`](https://github.com/o24s/sicada/blob/main/sicada-bench/src/bin/diag.rs), which prints the same three:
+Some implementations are omitted from individual rows because their output
+structure differed from the other three. The total path weight still agrees in
+these tropical-semiring benchmarks because ⊕ is `min`, which absorbs duplicate
+paths and dominated parallel arcs. With the log semiring, cases 1 and 4 would
+also change the total weight. The counts below come from
+[`diag`](https://github.com/o24s/sicada/blob/main/sicada-bench/src/bin/diag.rs),
+which reports the same three validation metrics:
 
 1. arcweight's `remove_epsilons` [appends the closure's arcs](https://github.com/aaronstevenwhite/arcweight/blob/bec1c8ee9863c914c512d9e601783095917063bd/src/algorithms/rmepsilon.rs#L390-L419)
-   without combining parallel ones, so a state reached both directly and along
-   an epsilon path keeps two arcs to it: 1437 against 1432 on `1000x4`, out of
-   the same 283 states. Every extra arc repeats one of sicada's along the same
-   label to the same state carrying the heavier weight, which is the one ⊕
-   discards; `DIAG_EPS=1 diag` counts them and finds no other kind.
+   without combining parallel arcs. A state reached both directly and through
+   an epsilon path therefore retains both arcs: 1437 arcs versus sicada's 1432
+   on `1000x4`, with 283 states in both results. Each extra arc duplicates a
+   label and destination at a higher weight, so tropical ⊕ discards it.
+   `DIAG_EPS=1 diag` confirms that all five differences have this form.
 2. rustfst's `determinize` [rebuilds each subset from a `HashMap`](https://github.com/garvys-org/rustfst/blob/8e1391df1ef3dfb85e309dd4ee8af45251d28c9f/rustfst/src/algorithms/determinize/determinize_fsa_op.rs#L147-L179)
-   and [compares subsets as an ordered `Vec`](https://github.com/garvys-org/rustfst/blob/8e1391df1ef3dfb85e309dd4ee8af45251d28c9f/rustfst/src/algorithms/determinize/element.rs#L15-L18), so one subset reached
-   twice can become two states. The count is not stable between runs: four runs
-   on `1000x4` gave 3064, 3125, 3065 and 3057 states against sicada's 2497. Its
-   `minimize` is stable and agrees at 952, so the language is the same.
+   and [compares subsets as an ordered `Vec`](https://github.com/garvys-org/rustfst/blob/8e1391df1ef3dfb85e309dd4ee8af45251d28c9f/rustfst/src/algorithms/determinize/element.rs#L15-L18). Consequently, the same subset can be represented in different orders and
+   become multiple states. Four runs on `1000x4` produced 3064, 3125, 3065, and
+   3057 states, compared with sicada's stable 2497. Minimization produces 952
+   states in both implementations, confirming language equivalence.
 3. arcweight's `minimize` produces 1032 states on `1000x4` where the other three
    produce 952. It is [Brzozowski's algorithm](https://github.com/aaronstevenwhite/arcweight/blob/bec1c8ee9863c914c512d9e601783095917063bd/src/algorithms/minimize.rs#L279-L298), reverse
    and determinize twice, not the weight pushing and encoded minimization OpenFst
-   uses. No precondition is documented: what it says instead is that it preserves
-   the weighted language and returns the unique canonical minimal FST, so the
-   input is not expected to arrive pushed.
+   uses. Its documentation specifies no weight-pushing precondition and states
+   that the operation preserves the weighted language and returns the unique
+   canonical minimal FST.
 4. arcweight's `compose` produces 4733 states on `1000x4` where the other three
    produce 307. Its [default filter](https://github.com/aaronstevenwhite/arcweight/blob/bec1c8ee9863c914c512d9e601783095917063bd/src/algorithms/compose.rs#L180-L186) is stateless: an
-   epsilon-sequencing filter needs somewhere to record which side may advance on
-   an epsilon, and this one's `FilterState` is `()`. `compose` does take a filter,
-   but `DefaultComposeFilter` is the only one the crate implements, so this is
-   not a choice the caller can make differently.
+   epsilon-sequencing filter needs state to record which side may advance on an
+   epsilon, but this filter's `FilterState` is `()`. Although `compose` accepts a
+   filter parameter, `DefaultComposeFilter` is the only implementation provided
+   by the crate.
 
-The graph inputs are `states` states with `arcs` arcs each, labels 1..64, weights
-in quarters; `-acyclic` means arcs always point forward. The automaton inputs are
-acyclic acceptors with one arc in eight unlabelled. `minimize` is determinize
-then minimize; `compose` sorts both sides first. All four determinization results
-are `connect`ed before comparison. `compose/dense-*` also carries two sicada
-variants not shown above: look-ahead composition building its index each time
-(486.6 µs and 1.60 ms) and with the index already built (187.0 µs and 746.2 µs).
+Graph inputs contain `states` states with `arcs` outgoing arcs per state, labels
+in 1..64, and weights quantized to quarters. In `-acyclic` inputs, every arc
+points forward. Automaton inputs are acyclic acceptors with an epsilon on one in
+eight arcs. The `minimize` benchmark determinizes before minimization, and the
+`compose` benchmark sorts both inputs first. Determinization results are passed
+through `connect` before comparison. The `compose/dense-*` benchmark also
+measures two sicada variants not shown in the table: look-ahead composition that
+builds its index for each call (486.6 µs and 1.60 ms), and composition with a
+prebuilt index (187.0 µs and 746.2 µs).
 
 ### Reproducing
 
@@ -152,11 +153,12 @@ cmake --build /path/to/ofst-build -j 4
 OPENFST_BUILD_DIR=/path/to/ofst-build cargo run --release -p sicada-bench --bin ab
 ```
 
-Without `OPENFST_BUILD_DIR` the OpenFst algorithm columns are absent; the data
-structure rows still run, since that C++ is compiled into the benchmark crate.
+Without `OPENFST_BUILD_DIR`, the OpenFst algorithm columns are omitted. The data
+structure benchmarks still run because their C++ implementations are compiled
+directly into the benchmark crate.
 
-Only figures from the same build are comparable: relinking moves the C++ code and
-changes hot-loop alignment by more than the differences measured here.
+Only measurements from the same build are comparable. Relinking changes the
+placement and alignment of the C++ hot loops by enough to affect these results.
 
 ## Building
 
@@ -165,16 +167,17 @@ cargo build
 cargo test
 ```
 
-The OpenFst submodule is only needed for the benchmarks or to consult the C++.
+The OpenFst submodule is required only for comparative benchmarks and source
+reference.
 
 ## License
 
 Apache License 2.0.
 
-This library does not link against any third-party C++ code. Its design,
-algorithm semantics, and binary file format are derived from OpenFst (Apache
-License 2.0), whose sources are vendored as a submodule for reference; that code
-remains under its own license. Four of its data structures are copied into
-`sicada-bench/cpp/openfst_shim.cc` so that the benchmarks measure upstream's own
-code, and that file carries OpenFst's copyright. `sicada-decode` follows Kaldi
-(Apache License 2.0) for its lattice semirings and decoder structure.
+The library does not link against third-party C++ code. Its algorithm semantics
+and binary format are based on OpenFst (Apache License 2.0), whose source is
+vendored as a reference submodule and remains under its original license. Four
+OpenFst data structures are included in `sicada-bench/cpp/openfst_shim.cc` for
+direct benchmark comparison; that file retains the OpenFst copyright notice.
+The lattice semirings and decoder structure in `sicada-decode` are based on
+Kaldi (Apache License 2.0).

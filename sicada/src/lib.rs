@@ -55,7 +55,7 @@
 //!
 //! The binary format is upstream's, so an FST written by OpenFst can be read
 //! here and one written here can be read there. `read` and `write` on each FST
-//! type take the byte stream; [`AnyFst`](fsts::any_fst::AnyFst) reads one whose
+//! type take the byte stream; `AnyFst` reads one whose
 //! type is only known from its header.
 
 #![allow(clippy::too_many_arguments)]

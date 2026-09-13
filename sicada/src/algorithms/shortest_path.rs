@@ -481,7 +481,13 @@ where
         return Ok(());
     }
 
-    if opts.nshortest == 1 {
+    // SICADA-BUGFIX: OpenFst's single-path branch returns before either pruning
+    // threshold is read. Keep the fast backtrace when no pruning was requested;
+    // the general search handles one path and both thresholds.
+    if opts.nshortest == 1
+        && opts.weight_threshold == A::Weight::zero()
+        && opts.state_threshold.is_none()
+    {
         let distance: Distance<A::Weight> = Rc::new(RefCell::new(Vec::new()));
         let comp = state_weight_compare::<A::StateId, A::Weight, _>(
             Rc::clone(&distance),
@@ -835,6 +841,41 @@ mod tests {
         assert_eq!(with(2.5), vec![1.0, 3.0], "the limit is 3.5");
         assert_eq!(with(1.0), vec![1.0], "the limit is 2.0");
         assert_eq!(with(10.0), vec![1.0, 3.0, 6.0], "the limit is 11.0");
+    }
+
+    /// Pruning is also honoured by the optimized single-path entry point.
+    #[test]
+    fn a_single_path_honours_the_pruning_thresholds() {
+        let run = |weight_threshold, state_threshold| {
+            let mut out = StdVectorFst::new();
+            shortest_path(
+                &fan(),
+                &mut out,
+                &ShortestPathOptions {
+                    nshortest: 1,
+                    weight_threshold,
+                    state_threshold,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            out
+        };
+
+        assert!(
+            weights(&run(TropicalWeight(-0.5), None)).is_empty(),
+            "a threshold lighter than one excludes even the best path"
+        );
+        assert_eq!(
+            run(TropicalWeight::zero(), Some(1)).num_states(),
+            0,
+            "the state cap applies when one path was requested"
+        );
+        assert_eq!(
+            weights(&run(TropicalWeight(1.0), None)),
+            vec![1.0],
+            "a usable threshold still returns the best path"
+        );
     }
 
     fn unique_best(fst: &StdVectorFst, n: usize) -> StdVectorFst {

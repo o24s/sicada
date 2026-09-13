@@ -8,6 +8,7 @@ use sicada::algorithms::shortest_distance::{SHORTEST_DELTA, shortest_distance};
 use sicada::arc::Arc as _;
 use sicada::arc::StdArc;
 use sicada::fst::{ExpandedFst, Fst, FstReadOptions, FstWriteOptions, MutableFst};
+#[cfg(feature = "fst-types")]
 use sicada::fsts::any_fst::AnyFst;
 use sicada::fsts::const_fst::ConstFst;
 use sicada::fsts::vector_fst::StdVectorFst;
@@ -48,10 +49,13 @@ fn a_const_fst_round_trips_through_a_file() {
         .expect("a const FST");
 
     // Read without being told what it is: the header names the type.
-    let any = AnyFst::<StdArc>::read_from_file(path, &FstReadOptions::default())
-        .expect("an FST of some type");
-    assert!(any.fst_type().starts_with("const"));
-    assert_eq!(any.num_states(), 2);
+    #[cfg(feature = "fst-types")]
+    {
+        let any = AnyFst::<StdArc>::read_from_file(path, &FstReadOptions::default())
+            .expect("an FST of some type");
+        assert!(any.fst_type().starts_with("const"));
+        assert_eq!(any.num_states(), 2);
+    }
 
     let total = shortest_distance(&loaded, SHORTEST_DELTA).expect("a shortest distance");
     assert_eq!(
