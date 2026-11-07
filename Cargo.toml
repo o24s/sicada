@@ -7,8 +7,8 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-sicada = { path = "sicada", version = "0.1.0" }
-sicada-decode = { path = "sicada-decode", version = "0.1.0" }
+sicada = { path = "sicada", version = "0.1.1" }
+sicada-decode = { path = "sicada-decode", version = "0.1.1" }
 arcweight = { version = "0.3.0", default-features = false, features = ["parallel"] }
 bitflags = "2.13.2"
 cc = "1.11.1"
